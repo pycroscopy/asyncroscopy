@@ -6,6 +6,7 @@ from twisted.internet.defer import Deferred
 import traceback
 
 class CentralProtocol(Int32StringReceiver):
+    MAX_LENGTH = 10_000_000 # quick fix
     """Generic command protocol using 4-byte length-prefixed messages."""
 
     def __init__(self, routing_table=None):
@@ -57,7 +58,7 @@ class CentralProtocol(Int32StringReceiver):
 
 class BackendClient(Int32StringReceiver):
     """Handles communication with a backend server (AS, Gatan, CEOS, etc)."""
-
+    MAX_LENGTH = 10_000_000 # quick fix
     def __init__(self, finished: Deferred):
         self.finished = finished
 
