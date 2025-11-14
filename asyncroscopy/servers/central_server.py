@@ -14,9 +14,9 @@ from asyncroscopy.servers.protocols.central_protocol import CentralProtocol
 #                 "Ceos": ("localhost", 9003),
 #                 "Preacquired_AS": ("localhost", 9004)}
 
-routing_table = {"AS": ("127.0.0.1", 9095),
+routing_table = {"AS": ("10.46.217.241", 9095),
                 "Gatan": ("localhost", 9002),
-                "Ceos": ("127.0.0.1", 7072)}
+                "Ceos": ("localhost", 9003)}
 
 class CentralFactory(Factory):
     def buildProtocol(self, addr):

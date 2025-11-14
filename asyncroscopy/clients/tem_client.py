@@ -1,10 +1,13 @@
 # tem_client.py
-import socket, struct, numpy as np
+'''Client for TEM central server.'''
+import socket
+import struct
 from concurrent.futures import ThreadPoolExecutor
-import json, struct
+import numpy as np
 
 # still needs a lot of work
 class TEMClient:
+    """Client for TEM central server."""
     def __init__(self, host="localhost", port=9000):
         self.host = host
         self.port = port
@@ -50,9 +53,6 @@ class TEMClient:
             print(f"Could not connect to {self.host}:{self.port} after {timeout} seconds")
             return None
 
-        except Exception as e:
-            print(f"Error communicating with server: {e}")
-            return None
 
     def _recv_exact(self, sock: socket.socket, n: int) -> bytes:
         """Receive exactly n bytes or raise ConnectionError if socket closes early."""
@@ -64,8 +64,9 @@ class TEMClient:
             buf += chunk
         return buf
 
-    def send_command_beta(self, destination: str, command: str, args: dict, timeout: float | None = None) -> bytes:
-    
+    def send_command_beta(self, destination: str, command: str,
+                          args: dict, timeout: float | None = None) -> bytes:
+        """Send a length-prefixed command with args and receive a length-prefixed response."""
         cmd = f"{destination}_{command} " + " ".join(f"{k}={v}" for k, v in args.items())
         print("[client] sending:", cmd)
         try:
@@ -85,29 +86,22 @@ class TEMClient:
                 # Read exactly that many bytes
                 data = self._recv_exact(sock, resp_len)
 
-            return data
+            return data.decode()
 
         except (ConnectionRefusedError, socket.timeout):
             print(f"Could not connect to {self.host}:{self.port} after {timeout} seconds")
             return None
 
-        except Exception as e:
-            print(f"Error communicating with server: {e}")
-            return None
-        
-    # Below should mirror ASProtocol methods in AS_server.py
-    # ================================================================
-    def connect_AS(self, host: str, port: int) -> bytes:
-        command = f"AS_connect_AS {host} {port}"
-        response = self.send_command(command, timeout=5)
-        return response.decode()
-
+    #  AS_server.py methods
+    # ======================
     def get_status(self):
+        """Get the current status of the AS server."""
         cmd = "AS_get_status"
         data = self.send_command(cmd)
         return data.decode()
 
     def get_scanned_image(self, scanning_detector: str, size: int, dwell_time: float) -> bytes:
+        """Get a scanned image from the AS server."""
         cmd = f"AS_get_scanned_image {scanning_detector} {size} {dwell_time}"
         data = self.send_command(cmd)
 
@@ -115,57 +109,48 @@ class TEMClient:
         return image
 
     def get_spectrum(self, size):
+        """Get a spectrum from the Gatan server."""
         cmd = f"Gatan_get_spectrum {size}"
         data = self.send_command(cmd)
         spectrum = np.frombuffer(data, dtype=np.float32)
         return spectrum
 
     def get_stage(self):
+        """Get the current stage positions from the AS server."""
         cmd = "AS_get_stage"
         data = self.send_command(cmd)
         positions = np.frombuffer(data, dtype=np.float32)
         return positions
 
+    #  Ceos_server.py methods
+    # ======================
     def run_tableau(self, tab_type="Fast", angle=18):
+        """Run a tableau acquisition on the CEOS corrector."""
         cmd = f"Ceos_run_tableau {tab_type} {angle}"
         data = self.send_command(cmd)
         return data.decode()
 
     def correct_aberration(self, name: str, value=None, target=None, select=None):
+        """Correct an aberration on the CEOS corrector."""
         cmd = f"Ceos_correct_aberration {name} {value} {target} {select}"
         data = self.send_command(cmd)
         return data.decode()
 
     def measure_c1a1(self):
+        """Measure C1 and A1 aberrations on the CEOS corrector."""
         cmd = "Ceos_measure_c1a1"
         data = self.send_command(cmd)
         return data.decode()
-
-    # Below should mirror Preacquired_ASProtocol methods in Preacquired_AS_server.py
-    # ================================================================
-    def connect_Preacquired_AS(self, path: str) -> bytes:
-        command = f"Preacquired_AS_connect_Preacquired_AS {path}"
-        response = self.send_command(command, timeout=5)
-        return response.decode()
-
-    def get_scanned_image_Preacquired_AS(self, channel_key="Channel_000"):
-        cmd = f"Preacquired_AS_get_scanned_image {channel_key}"
-        data = self.send_command(cmd)
-        hlen = struct.unpack("!I", data[:4])[0]
-        header = json.loads(data[4:4+hlen].decode())
-        arr = np.frombuffer(data[4+hlen:], dtype=np.dtype(header["dtype"]))
-        return arr.reshape(header["shape"])
 
 
     # Unique methods, including concurrent acquisitions
     # ================================================================
     def get_image_and_spectrum(self, image_size: int, image_dwell_time: float,
-                    spectrum_size: int, spectrum_dwell_time: float) -> bytes:
+                               spectrum_size: int) -> bytes:
         """Run both acquisitions concurrently and return results."""
-        future_img = self.executor.submit(self.get_scanned_image, 'Haadf', image_size, image_dwell_time)
+        future_img = self.executor.submit(self.get_scanned_image,
+                                          'Haadf', image_size, image_dwell_time)
         future_spec = self.executor.submit(self.get_spectrum, spectrum_size)
         img = future_img.result()
         spec = future_spec.result()
         return img, spec
-
-
