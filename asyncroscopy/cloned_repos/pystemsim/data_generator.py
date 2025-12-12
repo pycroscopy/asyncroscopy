@@ -216,7 +216,7 @@ def get_probe(ab, potential):
     pixel_size = potential.x.slope # Angstrom/pixel
     size_x, size_y = potential.shape
 
-    probe, A_k, chi  = pt.get_probe(ab, size_x, size_y,  scale = 'mrad', verbose= True)
+    probe, A_k, chi  = pt.get_probe(ab, size_x, size_y, verbose= True)
 
     dset = sidpy.Dataset.from_array(probe, name = 'Probe PSF')
     dset.data_type = 'image'

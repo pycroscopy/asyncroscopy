@@ -22,7 +22,7 @@ dependencies = [
     "pynsid>=0.0.7.2",
     "scifireaders>=0.12.0",
     "twisted>=25.5.0",
-    "pytemlib>=0.2025.11.4",
+    "pyTEMlib>=0.2025.11.4",
 ]
 
 [tool.setuptools]

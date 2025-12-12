@@ -34,6 +34,7 @@ except ImportError:
     print("pystemsim not installed; some functionality may be limited.")
 
 import pyTEMlib.probe_tools as pt
+import pyTEMlib.image_tools as it
 
 from twisted.internet import reactor, protocol
 from twisted.internet.defer import Deferred, inlineCallbacks, returnValue
@@ -104,7 +105,7 @@ class ASProtocol(ExecutionProtocol):
             fov = 96 # angstroms
             ab['FOV'] = fov /12 # Angstroms
             ab['convergence_angle'] = 30 # mrad
-            ab['wavelength'] = pt.get_wavelength(ab['acceleration_voltage'])
+            ab['wavelength'] = it.get_wavelength(ab['acceleration_voltage'])
 
             # make image
             # with pystemsim data generator
