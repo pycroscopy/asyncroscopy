@@ -218,6 +218,6 @@ uv.lock
 # Streamlit
 .streamlit/secrets.toml
 
-*.pyc
+AS_1.14_wheels/
 
-AS_1.15_wheels/
+*.pyc
