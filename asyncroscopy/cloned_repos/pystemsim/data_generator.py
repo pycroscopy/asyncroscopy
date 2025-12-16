@@ -248,7 +248,7 @@ def convolve_kernel(potential, psf):
     return dset
 
 
-def poisson_noise(image, counts = 10e8):
+def poisson_noise(image, counts = 1e9):
     # Normalize the image
     image = image - image.min()
     image = image / image.sum()
