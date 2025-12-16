@@ -212,8 +212,8 @@ def airy_disk(potential, resolution = 1.1):
 
     return dset
 
-def get_probe(ab, potential):
-    pixel_size = potential.x.slope # Angstrom/pixel
+def get_probe(ab, potential, pixel_size=0.106):
+    # pixel_size = potential.x.slope # Angstrom/pixel
     size_x, size_y = potential.shape
 
     probe, A_k, chi  = pt.get_probe(ab, size_x, size_y, verbose= True)

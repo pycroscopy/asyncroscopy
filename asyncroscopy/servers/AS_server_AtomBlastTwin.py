@@ -38,7 +38,6 @@ import pyTEMlib.image_tools as it
 from twisted.internet import reactor, protocol
 from twisted.internet.defer import Deferred, inlineCallbacks, returnValue
 
-sys.path.insert(0, "/Users/austin/Desktop/Projects/autoscript_tem_microscope_client")
 import autoscript_tem_microscope_client as auto_script
 
 
@@ -166,7 +165,7 @@ class ASProtocol(ExecutionProtocol):
 
     def unblank_beam(self, args: dict):
         """Unblank the electron beam and start dose accumulation"""
-        duration = float(args.get('duration', 0))  # seconds
+        duration = float(args.get('duration', 1))  # seconds
         
         self.factory.beam_blanked = False
         msg = f"Beam unblanked"
@@ -209,48 +208,98 @@ class ASProtocol(ExecutionProtocol):
         self.log.info(f"[AS] {msg}")
         self.sendString(package_message(msg))
 
+#     def _apply_beam_dose(self, duration):
+#         """Apply electron dose to the dose map and calculate damage"""
+#         if self.factory.atoms is None:
+#             self.log.warning("[AS] No sample loaded. Cannot apply dose.")
+#             return
+#         
+#         if self.factory.beam_blanked:
+#             return
+#         
+#         # Calculate total electrons delivered
+#         # current (pA) * duration (s) / electron charge (C)
+#         e_charge = 1.602e-19  # Coulombs
+#         total_electrons = (self.factory.beam_current * 1e-12 * duration) / e_charge
+#         
+#         # get current probe:
+#         tem = NotebookClient.connect(host='localhost', port=9000)
+#         ab = tem.send_command(destination='Ceos', command='getAberrations', args={})
+#         ab = ast.literal_eval(ab)
+#         ab['acceleration_voltage'] = self.factory.acceleration_voltage
+#         ab['FOV'] = self.factory.fov / 12
+#         ab['convergence_angle'] = 30  # mrad
+#         ab['wavelength'] = it.get_wavelength(ab['acceleration_voltage'])
+#         probe = dg.get_probe(ab, np.zeros(self.factory.grid_shape))
+#         # now, probe is a np array
+#         # use it instead of this gaussian:
+# 
+#         # Create Gaussian beam profile
+#         # Convert normalized coordinates to angstroms
+#         x_norm, y_norm = self.factory.beam_position
+#         x_beam = x_norm * self.factory.fov
+#         y_beam = y_norm * self.factory.fov
+#         probe_size = 0.5  # angstroms (FWHM)
+#         sigma = probe_size / 2.355  # Convert FWHM to sigma
+#         y_coords = np.linspace(0, self.factory.fov, self.factory.grid_shape[0])
+#         x_coords = np.linspace(0, self.factory.fov, self.factory.grid_shape[1])
+#         X, Y = np.meshgrid(x_coords, y_coords)
+#         beam_profile = np.exp(-((X - x_beam)**2 + (Y - y_beam)**2) / (2 * sigma**2))
+#         beam_profile /= beam_profile.sum()  # Normalize
+#         
+#         # Add dose to dose map (electrons per Ų)
+#         pixel_area = self.factory.pixel_size ** 2
+#         dose_increment = beam_profile * total_electrons / pixel_area
+#         self.factory.dose_map += dose_increment
+#         
+#         # Apply damage based on accumulated dose
+#         self._apply_damage_model()
+        
     def _apply_beam_dose(self, duration):
-        """Apply electron dose to the dose map and calculate damage"""
+        """Apply electron dose to the dose map using the real probe"""
         if self.factory.atoms is None:
             self.log.warning("[AS] No sample loaded. Cannot apply dose.")
             return
-        
+
         if self.factory.beam_blanked:
             return
-        
-        # Calculate total electrons delivered
-        # current (pA) * duration (s) / electron charge (C)
+
         e_charge = 1.602e-19  # Coulombs
-        total_electrons = (self.factory.beam_current * 1e-12 * duration) / e_charge
-        
-        # Create Gaussian beam profile
-        # Convert normalized coordinates to angstroms
+        total_electrons = (
+            self.factory.beam_current * 1e-12 * duration
+        ) / e_charge
+
+        # Get real probe from microscope model
+        tem = NotebookClient.connect(host='localhost', port=9000)
+        ab = tem.send_command(destination='Ceos', command='getAberrations', args={})
+        ab = ast.literal_eval(ab)
+        ab['acceleration_voltage'] = self.factory.acceleration_voltage
+        ab['FOV'] = self.factory.fov / 12
+        ab['convergence_angle'] = 30  # mrad
+        ab['wavelength'] = it.get_wavelength(ab['acceleration_voltage'])
+        probe, A_k, chi  = pt.get_probe(ab, self.factory.grid_shape[0], self.factory.grid_shape[1], verbose= True)
+
+
+        print('probe created')
+        # Convert normalized position → pixel indices
         x_norm, y_norm = self.factory.beam_position
-        x_beam = x_norm * self.factory.fov
-        y_beam = y_norm * self.factory.fov
-        
-        probe_size = 0.5  # angstroms (FWHM)
-        sigma = probe_size / 2.355  # Convert FWHM to sigma
-        
-        # Create coordinate grids
-        y_coords = np.linspace(0, self.factory.fov, self.factory.grid_shape[0])
-        x_coords = np.linspace(0, self.factory.fov, self.factory.grid_shape[1])
-        X, Y = np.meshgrid(x_coords, y_coords)
-        
-        # Gaussian beam profile
-        beam_profile = np.exp(-((X - x_beam)**2 + (Y - y_beam)**2) / (2 * sigma**2))
-        beam_profile /= beam_profile.sum()  # Normalize
-        
-        # Add dose to dose map (electrons per Ų)
-        pixel_area = self.factory.pixel_size ** 2
+        ny, nx = self.factory.grid_shape
+        x_pix = int(x_norm * nx)
+        y_pix = int(y_norm * ny)
+        cx = nx // 2
+        cy = ny // 2
+        shift_x = x_pix - cx
+        shift_y = y_pix - cy
+
+        # this can lead to unphysical results near edge
+        beam_profile = np.roll(probe,shift=(shift_y, shift_x),axis=(0, 1))
+
+        pixel_area = self.factory.pixel_size ** 2  # Å²
         dose_increment = beam_profile * total_electrons / pixel_area
         self.factory.dose_map += dose_increment
-        
-        # Apply damage based on accumulated dose
+
         self._apply_damage_model()
-        
-        max_dose = self.factory.dose_map.max()
-        self.log.info(f"[AS] Applied {total_electrons:.2e} electrons. Max dose: {max_dose:.2e} e/Ų")
+
 
     def _apply_damage_model(self):
         """
