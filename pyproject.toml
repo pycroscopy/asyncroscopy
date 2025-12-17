@@ -23,6 +23,8 @@ dependencies = [
     "scifireaders>=0.12.0",
     "twisted>=25.5.0",
     "pyTEMlib>=0.2025.11.4",
+    "botorch==0.12.0",
+    "pre-commit>=4.5.0",
 ]
 
 [tool.setuptools]
