@@ -331,7 +331,7 @@ class ASProtocol(ExecutionProtocol):
             if missing > 0:
                 frac_lost = missing / N0
                 coord_amp = np.exp(frac_lost)
-                lambda_inst = (gamma_instability.get(sym, 0.0) * coord_amp * local_dose / 1e3)
+                lambda_inst = (gamma_instability.get(sym, 0.0) * coord_amp * local_dose / 1e4) # change here
             else:
                 lambda_inst = 0.0
             if N <=1:
