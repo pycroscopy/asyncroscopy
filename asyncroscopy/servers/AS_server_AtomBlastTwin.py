@@ -122,7 +122,7 @@ class ASProtocol(ExecutionProtocol):
         self.log.info(f"[AS] Loading sample from {cif_path}")
         xtal = read(cif_path)
         xtal = xtal * replicate
-        
+        xtal.set_pbc((True, True, False))
         # Store atoms in factory (persistent state)
         self.factory.atoms = xtal
         
@@ -254,10 +254,14 @@ class ASProtocol(ExecutionProtocol):
 
         self._apply_damage_model()
 
-
-    def _apply_damage_model(self):
+    def _apply_damage_model(self, dose_map=None):
         """
-        Knock-on damage with coordination instability and vacancy clustering.
+        Damage model with three independent channels:
+        1) Knock-on (ballistic)
+        2) Radiolysis / ionization
+        3) Neighbor-induced structural instability
+
+        All channels contribute additively to a Poisson hazard.
         """
 
         if self.factory.atoms is None:
@@ -267,55 +271,41 @@ class ASProtocol(ExecutionProtocol):
         positions = atoms.get_positions()
         symbols = atoms.get_chemical_symbols()
 
+        # scanned image passes custon dose map
+        # else, use factory dose map
+        if dose_map is None:
+            dose_map = self.factory.dose_map
+
         pixel_size = self.factory.pixel_size
-        dose_map = self.factory.dose_map
         ny, nx = self.factory.grid_shape
 
-        # --------------------------------------------------
-        # Knock-on cross sections at 200 kV (Å²)
-        # --------------------------------------------------
-        sigma_knockon = {
-            "S": 3e-7,
-            "Se": 1e-7,
-            "Mo": 1e-9,
-            "W": 5e-10,
-        }
+        # Cross sections / rates (Å² or rate-like prefactors)
+        # Knock-on (200 kV)
+        sigma_knockon = {"S": 3e-7,"Se": 1e-7,"Mo": 1e-9,"W": 5e-10}
 
-        # --------------------------------------------------
+        # Radiolysis / ionization
+        sigma_radiolysis = {"S": 5e-9,"Se": 2e-9,"Mo": 1e-10,"W": 5e-11}
+
+        # Structural instability prefactor
+        gamma_instability = {"S": 0.3,"Se": 0.3,"Mo": 0.3,"W": 0.3}
+
         # Ideal coordination numbers
-        # --------------------------------------------------
-        ideal_coordination = {
-            "S": 3,
-            "Se": 3,
-            "Mo": 6,
-            "W": 6,
-        }
+        ideal_coordination = {"S": 3,"Se": 3,"Mo": 6,"W": 6,}
 
-        # --------------------------------------------------
-        # Neighbor list (first shell only)
-        # --------------------------------------------------
+        # Neighbor list (first coordination shell)
         cutoffs = []
         for sym in symbols:
             if sym in ("S", "Se"):
-                cutoffs.append(2.8)
+                cutoffs.append(1.2)
             else:
-                cutoffs.append(3.2)
+                cutoffs.append(1.2)
 
         nl = NeighborList(cutoffs, self_interaction=False, bothways=True)
         nl.update(atoms)
 
         atoms_to_remove = []
-
-        # --------------------------------------------------
-        # Vacancy clustering parameters
-        # --------------------------------------------------
-        alpha = 4.0  # coordination instability
-        beta = 4.0   # vacancy-edge enhancement
-
         for i, (pos, sym) in enumerate(zip(positions, symbols)):
-            # -------------------------
             # Dose lookup
-            # -------------------------
             x, y = pos[:2]
             ix = int(x / pixel_size)
             iy = int(y / pixel_size)
@@ -324,119 +314,45 @@ class ASProtocol(ExecutionProtocol):
                 continue
 
             local_dose = dose_map[iy, ix]
-
-            sigma = sigma_knockon.get(sym, 0.0)
-            if sigma <= 0.0:
+            if local_dose <= 0.0:
                 continue
 
-            # -------------------------
-            # Neighbor analysis
-            # -------------------------
+            # Knock-on hazard
+            lambda_knock = (sigma_knockon.get(sym, 0.0) * local_dose)
+
+            # Radiolysis hazard
+            lambda_rad = (sigma_radiolysis.get(sym, 0.0) * local_dose)
+
+            # Neighbor instability hazard
             neighbors, offsets = nl.get_neighbors(i)
             N = len(neighbors)
             N0 = ideal_coordination.get(sym, N)
-
-            # Missing neighbors = adjacent vacancies
             missing = max(N0 - N, 0)
-
-            # -------------------------
-            # Base knock-on probability
-            # -------------------------
-            p_base = 1.0 - np.exp(-sigma * local_dose)
-
-            # Convert to rate-like form
-            lambda_base = -np.log(1.0 - p_base)
-
-            # -------------------------
-            # Coordination instability
-            # -------------------------
-            if N < N0:
+            if missing > 0:
                 frac_lost = missing / N0
-                coord_factor = np.exp(alpha * frac_lost)
+                coord_amp = np.exp(frac_lost)
+                lambda_inst = (gamma_instability.get(sym, 0.0) * coord_amp * local_dose / 1e4) # change here
             else:
-                coord_factor = 1.0
-
-            # -------------------------
-            # Vacancy clustering enhancement
-            # -------------------------
-            # Each missing neighbor boosts damage strongly
-            vacancy_factor = np.exp(beta * missing / N0)
-
-            # -------------------------
-            # Final probability
-            # -------------------------
-            lambda_eff = lambda_base * coord_factor * vacancy_factor
-            p_remove = 1.0 - np.exp(-lambda_eff)
+                lambda_inst = 0.0
+            if N <=1:
+                lambda_inst  = 1e6  # Isolated atom, very unstable
+            # Total hazard and removal
+            lambda_total = lambda_knock + lambda_rad + lambda_inst
+            p_remove = 1.0 - np.exp(-lambda_total)
 
             if np.random.rand() < p_remove:
                 atoms_to_remove.append(i)
 
+        # Apply removals
         if atoms_to_remove:
             mask = np.ones(len(atoms), dtype=bool)
             mask[atoms_to_remove] = False
             self.factory.atoms = atoms[mask]
 
-            self.log.info(f"[AS] Vacancy clustering removed {len(atoms_to_remove)} atoms")
+            self.log.info(
+                f"[AS] Damage model removed {len(atoms_to_remove)} atoms "
+                f"(knock-on + radiolysis + instability)")
 
-#     def _apply_damage_model(self):
-#         """
-#         Knock-on beam damage model for 200 kV STEM.
-#         
-#         P_remove = 1 - exp(-sigma(E) * local_dose)
-# 
-#         Dose units: e / Å²
-#         Cross sections: Å²
-#         """
-# 
-#         if self.factory.atoms is None:
-#             return
-# 
-#         atoms = self.factory.atoms
-#         positions = atoms.get_positions()[:, :2]
-#         symbols = atoms.get_chemical_symbols()
-# 
-#         pixel_size = self.factory.pixel_size
-#         dose_map = self.factory.dose_map
-#         ny, nx = self.factory.grid_shape
-# 
-#         # --------------------------------------------------
-#         # Knock-on cross sections at 200 kV (Å²)
-#         # Order-of-magnitude correct
-#         # --------------------------------------------------
-#         sigma_knockon_200kV = {
-#             "C": 1e-7,
-#             "S": 3e-7,
-#             "Se": 1e-7,
-#             "Mo": 1e-9,
-#             "W": 5e-10,
-#         }
-# 
-#         atoms_to_remove = []
-# 
-#         for i, ((x, y), sym) in enumerate(zip(positions, symbols)):
-#             ix = int(x / pixel_size)
-#             iy = int(y / pixel_size)
-# 
-#             if not (0 <= ix < nx and 0 <= iy < ny):
-#                 continue
-# 
-#             local_dose = dose_map[iy, ix]
-# 
-#             sigma = sigma_knockon_200kV.get(sym, 0.0)
-#             if sigma <= 0.0:
-#                 continue
-# 
-#             p_remove = 1.0 - np.exp(-sigma * local_dose)
-# 
-#             if np.random.rand() < p_remove:
-#                 atoms_to_remove.append(i)
-# 
-#         if atoms_to_remove:
-#             mask = np.ones(len(atoms), dtype=bool)
-#             mask[atoms_to_remove] = False
-#             self.factory.atoms = atoms[mask]
-# 
-#             self.log.info(f"[AS] 200 kV knock-on damage removed {len(atoms_to_remove)} atoms")
 
     def get_dose_map(self, args=None):
         """Return the current accumulated dose map"""
@@ -513,11 +429,12 @@ class ASProtocol(ExecutionProtocol):
 
             # Apply dose during scan
             self.factory.dose_map += dwell_time * (self.factory.beam_current * 1e-12) / (1.602e-19)
+            delta_dose = np.zeros_like(self.factory.dose_map) + dwell_time * (self.factory.beam_current * 1e-12) / (1.602e-19)
+            self._apply_damage_model(dose_map=delta_dose)
 
             image = np.array(sim_im, dtype=np.float32)
             self.factory.status = "Ready"
             self.sendString(package_message(image))
-
 
 
     def get_stage(self, args=None):
