@@ -66,10 +66,11 @@ class ASProtocol(ExecutionProtocol):
         screen must be inserted
         """
         mic = self.factory.microscope
-        original_gun_lens = microscope.optics.monochromator.focus
+        original_gun_lens = mic.optics.monochromator.focus
         gun_lens_series = np.linspace(5, 100, 15)
 
         # series of measurements
+        current_series = []
         for val in gun_lens_series:
             mic.optics.monochromator.focus = val # original_gun_lens + val
             time.sleep(1)
@@ -89,6 +90,39 @@ class ASProtocol(ExecutionProtocol):
         msg = f"[AS] calibrated screen current"
         self.log.info(msg)
         self.sendString(package_message(msg))
+
+    # gerd's code - check
+#     def carth2polar(z):
+#         return np.linalg.norm(z), np.degrees(np.arctan2(z[1], z[0]))
+#     # def carth2polar, correct_3rd_orders, correct_low_orders
+#     def aberration_correction(self, args: dict):
+#         """Perform aberration correction"""
+#         tem = NotebookClient.connect(host='localhost',port=9000)
+#         mic = self.factory.microscope
+#         mic.optics.scan_field_of_view  = 348*1e-9
+#         order = parameter.get('order, 1')
+# 
+#         print(f"Performing aberration correction of order {order}")
+#         if order <3:
+#             tableau_result = tem.send_command(destination = 'Ceos', command = 'acquireTableau', args = {'tabType':"Fast", 'angle':1})
+#             for key in ['C1', 'A1', 'B2', 'A2']:
+#                 amplitude , angle = carth2polar(tableau_result['aberrations'][key])                                         
+#                 print(f" {key}: {amplitude*1e9:.2f}nm {angle:.2f}deg")
+#             print(f" WD: {np.linalg.norm(tableau_result['aberrations']['WD'])*1e3:.3f}mrad ")
+#             tableau_result['corrected'] = correct_low_orders(self.ceos, tableau_result['aberrations'])
+#         else:
+#             tableau_result = self.ceos.run_tableau(tab_type="Enhanced", angle=40)
+# 
+#             for key in ['C3', 'S3', 'A3', 'A4', 'D4', 'B4']:   
+#                 amplitude , angle = carth2polar(tableau_result['aberrations'][key])                                         
+#                 print(f" {key}: {amplitude*1e9:.2f}nm {angle:.2f}deg")
+#                 tableau_result['corrected'] = correct_3rd_orders(self.ceos, tableau_result['aberrations'])
+#         
+#         self.sendString(package_message(out_dict))
+        
+
+# ---------------------------
+
 
     def set_current(self, args:dict):
         """
@@ -134,7 +168,7 @@ class ASProtocol(ExecutionProtocol):
         self.log.info(f"[AS] {msg}")
         self.sendString(package_message(msg))
 
-    def unblank_beam(self, args: dict = None)
+    def unblank_beam(self, args: dict = None):
         """
         unblank beam
         optional dwell time, then auto-blank
@@ -153,7 +187,7 @@ class ASProtocol(ExecutionProtocol):
         self.log.info(f"[AS] {msg}")
         self.sendString(package_message(msg))
 
-    def get_scanned_image(self, args: dict)
+    def get_scanned_image(self, args: dict):
         """Return a scanned image using the indicated detector"""
         scanning_detector = args.get('scanning_detector')
         size = args.get('size')
@@ -166,10 +200,11 @@ class ASProtocol(ExecutionProtocol):
             return None
         else:
             self.factory.status = "Busy"
-            image = self.microscope.acquisition.acquire_stem_image(
+            image = self.factory.microscope.acquisition.acquire_stem_image(
                 scanning_detector = 'HAADF', 
                 size = size, 
                 dwell_time = dwell_time)
+            image = np.array(image.data, dtype=np.float32)
             self.factory.status = "Ready"
             self.sendString(package_message(image))
 
