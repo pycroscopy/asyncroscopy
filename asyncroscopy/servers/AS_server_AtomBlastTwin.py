@@ -53,7 +53,7 @@ class ASFactory(protocol.Factory):
         # Beam damage simulation state
         self.atoms = None  # ASE Atoms object
         self.dose_map = None  # 2D array tracking accumulated dose (e/Å²)
-        self.beam_position = None  # (x, y) in angstroms
+        self.beam_position = None  # (x, y) in % of image
         self.beam_blanked = True
         self.beam_current = 100.0  # pA
         self.acceleration_voltage = 60e3  # eV
