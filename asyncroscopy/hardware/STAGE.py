@@ -72,16 +72,14 @@ class STAGE(Device):
     def read_position(self):
         return tuple(self._position)
 
-    def write_position(self, value: list) -> None:
-        """Change stage position as [x,y,z,alpha,beta]"""
+    def write_position(self, value):
         try:
-            self._microscope.set_stage_position(value)
+            result = self._microscope.set_stage_position(value)
         except:
             self._init_microscope_proxy()
-            self._microscope.set_stage_position(value)
-            self._position = list(value)
-            self._x, self._y, self._z, self._alpha, self._beta = value
-   
+            result = self._microscope.set_stage_position(value)
+            self._position = list(result)
+            
 
 # ----------------------------------------------------------------------
 # Server entry point
