@@ -6,6 +6,8 @@ It does NOT talk to AutoScript directly — the Microscope device
 reads these attributes via DeviceProxy before acquiring.
 """
 
+import tango
+
 from tango import AttrWriteType, DevState
 from tango.server import Device, attribute
 
@@ -23,6 +25,7 @@ class STAGE(Device):
     # Attributes
     # ------------------------------------------------------------------
 
+   
     beta_tilt_enabled = attribute(
         label="Beta Tilt Enabled",
         dtype=bool,
@@ -30,55 +33,14 @@ class STAGE(Device):
         doc="Whether the holder supports beta tilt)",
     )
 
-    x = attribute(
-        label="Position",
-        dtype=float,
+    position = attribute(
+        label="Stage Position",
+        dtype=(float,),
+        max_dim_x=5,
         access=AttrWriteType.READ_WRITE,
-        unit="m",
-        # min_value= TODO: set these - AS-example -  specimen.stage.get_axis_limits
-        # max_value= TODO: set these - AS-example -  specimen.stage.get_axis_limits
-        doc="Stage X position in meters",
+        doc="Stage position as [x, y, z, alpha, beta]",
     )
-
-    y = attribute(
-        label="Position",
-        dtype=float,
-        access=AttrWriteType.READ_WRITE,
-        unit="m",
-        # min_value= TODO: set these
-        # max_value= TODO: set these
-        doc="Stage Y position in meters",
-    )
-
-    z = attribute(
-        label="Position",
-        dtype=float,
-        access=AttrWriteType.READ_WRITE,
-        unit="m",
-        # min_value= TODO: set these
-        # max_value= TODO: set these
-        doc="Stage Z position in meters",
-    )
-
-    alpha = attribute(
-        label="Alpha tilt",
-        dtype=float,
-        access=AttrWriteType.READ_WRITE,
-        unit="degrees",
-        min_value = -35,
-        max_value = 35,
-        doc="Stage alpha tilt in degrees",
-    )
-
-    beta = attribute(
-        label="Beta tilt",
-        dtype=float,
-        access=AttrWriteType.READ_WRITE,
-        unit="degrees",
-        min_value = -15,
-        max_value = 15,
-        doc="Stage beta tilt in degrees",
-    )
+    
 
     # ------------------------------------------------------------------
     # Initialisation
@@ -87,17 +49,15 @@ class STAGE(Device):
     def init_device(self) -> None:
         Device.init_device(self)
         self.set_state(DevState.ON)
-
-        # Start with zeros, TODO: get real numbers during initialization
-        self._beta_tilt_enabled: bool = False
-        self._x: float = 0.0
-        self._y: float = 0.0
-        self._z: float = 0.0
-        self._alpha: float = 0.0
-        self._beta: float = 0.0
-
-
+        self._position = [0.0, 0.0, 0.0, 0.0, 0.0]
+        self._microscope = None
         self.info_stream("STAGE device initialised")
+
+    # Set up microscope proxy
+    def _init_microscope_proxy(self):
+        """Connect to the microscope on first use."""
+        self._microscope = tango.DeviceProxy("asyncroscopy/microscope/default")
+
 
     # ------------------------------------------------------------------
     # Attribute read / write
@@ -109,35 +69,19 @@ class STAGE(Device):
     def write_beta_tilt_enabled(self, value: bool) -> None:
         self._beta_tilt_enabled = value
 
-    def read_x(self) -> float:
-        return self._x
+    def read_position(self):
+        return tuple(self._position)
 
-    def write_x(self, value: float) -> None:
-        self._x = value
-
-    def read_y(self) -> float:
-        return self._y
-
-    def write_y(self, value: float) -> None:
-        self._y = value
-
-    def read_z(self) -> float:
-        return self._z
-
-    def write_z(self, value: float) -> None:
-        self._z = value
-
-    def read_alpha(self) -> float:
-        return self._alpha
-
-    def write_alpha(self, value: float) -> None:
-        self._alpha = value
-
-    def read_beta(self) -> float:
-        return self._beta
-
-    def write_beta(self, value: float) -> None:
-        self._beta = value
+    def write_position(self, value: list) -> None:
+        """Change stage position as [x,y,z,alpha,beta]"""
+        try:
+            self._microscope.set_stage_position(value)
+        except:
+            self._init_microscope_proxy()
+            self._microscope.set_stage_position(value)
+            self._position = list(value)
+            self._x, self._y, self._z, self._alpha, self._beta = value
+   
 
 # ----------------------------------------------------------------------
 # Server entry point

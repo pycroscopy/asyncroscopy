@@ -419,6 +419,10 @@ class ThermoMicroscope(Microscope):
         """get screen current in pA"""
         screen_current = self._microscope.detectors.screen.measure_current() * 1e12
         return screen_current
+    
+    def _set_stage_position(self, position) -> list:
+        """Set multi axis position. Dummy for now."""
+        return [67.0, 67.0, 67.0, 67.0, 67.0]
 
     def _get_stage(self):
         """Get the current stage position as a list of floats [x, y, z, alpha, beta]."""

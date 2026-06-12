@@ -276,6 +276,11 @@ class Microscope(Device, metaclass=CombinedMeta):
         get the screen current in pA
         """
         return self._get_screen_current()
+    
+    @command(dtype_in=DevVarFloatArray, dtype_out=DevVarFloatArray)
+    def set_stage_position(self, position) -> list:
+        """Set stage position [x, y, z, alpha, beta]."""
+        return self._set_stage_position(position)
 
     @command(dtype_out=DevVarFloatArray)
     def get_stage(self):
