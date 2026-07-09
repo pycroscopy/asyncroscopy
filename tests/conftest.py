@@ -20,6 +20,7 @@ from tango.test_context import MultiDeviceTestContext
 from asyncroscopy.instruments.electron_microscope.detectors.camera import CAMERA
 from asyncroscopy.instruments.electron_microscope.detectors.eds import EDS
 from asyncroscopy.instruments.electron_microscope.detectors.flucam import FLUCAM
+from asyncroscopy.instruments.electron_microscope.hardware.aperture import APERTURE
 from asyncroscopy.instruments.electron_microscope.hardware.scan import SCAN
 from asyncroscopy.instruments.electron_microscope.hardware.stage import STAGE
 from asyncroscopy.instruments.electron_microscope.digital_twin import DigitalTwin
@@ -47,6 +48,15 @@ def tango_ctx(data_save_dir):
     Device names here MUST match what you put into STEMMicroscope properties.
     """
     devices_info = [
+        {
+            "class": APERTURE,
+            "devices": [
+                {
+                    "name": "asyncroscopy/aperture/default",
+                    "properties": {},
+                }
+            ],
+        },
         {
             "class": SCAN,
             "devices": [
@@ -178,6 +188,13 @@ def flucam_proxy(tango_ctx):
 @pytest.fixture(scope="session")
 def stage_proxy(tango_ctx):
     return tango.DeviceProxy(tango_ctx.get_device_access("asyncroscopy/stage/default"))
+
+
+@pytest.fixture
+def aperture_proxy(tango_ctx):
+    proxy = tango.DeviceProxy(tango_ctx.get_device_access("asyncroscopy/aperture/default"))
+    proxy.Init()
+    return proxy
 
 
 @pytest.fixture(scope="session")

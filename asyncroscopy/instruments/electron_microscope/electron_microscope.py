@@ -83,6 +83,7 @@ class ElectronMicroscope(Instrument):
         self._microscope: Optional[object] = None
         self._stem_mode: bool = False
         self._detector_proxies: dict[str, tango.DeviceProxy] = {}
+        self._acquisition_active: bool = False
 
     def read_instrument_type(self) -> str:
         return 'TEM'
@@ -106,6 +107,14 @@ class ElectronMicroscope(Instrument):
     def read_stem_mode(self) -> bool:
         return self._stem_mode
 
+    def _run_acquisition_command(self, acquire, *args, **kwargs):
+        previous_active = getattr(self, "_acquisition_active", False)
+        self._acquisition_active = True
+        try:
+            return acquire(*args, **kwargs)
+        finally:
+            self._acquisition_active = previous_active
+
     @command
     def Disconnect(self) -> None:
         """Disconnect from microscope hardware gracefully."""
@@ -117,31 +126,31 @@ class ElectronMicroscope(Instrument):
         """Acquire a single spectrum and return its DATA/Tiled unique id."""
         detector_name = detector_name.lower().strip()
         proxy = self._detector_proxies.get(detector_name)
-        return self._acquire_spectrum(detector_name, proxy.exposure_time)
+        return self._run_acquisition_command(self._acquire_spectrum, detector_name, proxy.exposure_time)
 
     @command(dtype_in=DevVarStringArray, dtype_out=str)
     def acquire_scanned_image(self, detector_list: list[str] = ['haadf']) -> str:
         """Acquire an image with scanning detectors and return its DATA/Tiled key."""
         scan = self._detector_proxies.get('scan')
-        return self._acquire_scanned_image(scan.imsize, scan.dwell_time, detector_list, list(scan.scan_region), scan.output_format)
+        return self._run_acquisition_command(self._acquire_scanned_image, scan.imsize, scan.dwell_time, detector_list, list(scan.scan_region), scan.output_format)
 
     @command(dtype_out=str)
     def acquire_scanned_data_advanced(self) -> str:
         """Trigger an advanced 4D scanned data acquisition with the Ceta camera."""
         scan = self._detector_proxies.get('scan')
-        return self._acquire_scanned_data_advanced(scan.imsize, scan.dwell_time, 'BM-Ceta', list(scan.scan_region))
+        return self._run_acquisition_command(self._acquire_scanned_data_advanced, scan.imsize, scan.dwell_time, 'BM-Ceta', list(scan.scan_region))
 
     @command(dtype_out=str)
     def acquire_camera_image(self) -> str:
         """Acquire a camera image using settings from the camera device."""
         camera = self._detector_proxies.get('camera')
-        return self._acquire_camera_image(camera.imsize, camera.exposure_time, 'BM-Ceta', camera.readout_area)
+        return self._run_acquisition_command(self._acquire_camera_image, camera.imsize, camera.exposure_time, 'BM-Ceta', camera.readout_area)
 
     @command(dtype_out=str)
     def acquire_flucam_image(self) -> str:
         """Acquire a Flucam image using settings from the flucam device."""
         flucam = self._detector_proxies.get('flucam')
-        return self._acquire_camera_image(flucam.imsize, flucam.exposure_time, 'Flucam', flucam.readout_area)
+        return self._run_acquisition_command(self._acquire_camera_image, flucam.imsize, flucam.exposure_time, 'Flucam', flucam.readout_area)
 
     @command(dtype_in=int, dtype_out=DevEncoded)
     def get_image_data_cached(self, index: int) -> tuple[str, bytes]:

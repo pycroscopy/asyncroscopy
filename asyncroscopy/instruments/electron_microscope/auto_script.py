@@ -16,9 +16,10 @@ Real AutoScript image commands save the adorned object on disk and return the
 DATA/Tiled unique id for that saved acquisition.
 """
 
+import json
 import math
 import time
-import json
+from typing import Any
 
 import numpy as np
 import tango
@@ -26,6 +27,13 @@ from tango import AttrWriteType, DevState
 from tango.server import attribute, command, device_property
 
 from asyncroscopy.instruments.electron_microscope.electron_microscope import ElectronMicroscope
+from asyncroscopy.instruments.electron_microscope.adapters.autoscript_apertures import (
+    AutoScriptApertureAdapter,
+)
+from asyncroscopy.instruments.electron_microscope.hardware.aperture import (
+    ApertureInfo,
+    SimulatedApertureBackend,
+)
 from asyncroscopy.data.data_writer import DEFAULT_ACQUISITION_DIR, save_acquisition
 
 # AutoScript imports — only available on the microscope PC.
@@ -148,7 +156,9 @@ class AutoScriptMicroscope(ElectronMicroscope):
     # ------------------------------------------------------------------
 
     def _connect(self):
+        self._aperture_logging_ready = True
         self._connect_hardware()
+        self._configure_aperture_adapter()
         self._connect_detector_proxies()
         self.set_state(DevState.ON)
         self.screen_current_calibration = None
@@ -157,6 +167,8 @@ class AutoScriptMicroscope(ElectronMicroscope):
         """Establish AutoScript connection from MPC -> hardware."""
         if not _AUTOSCRIPT_AVAILABLE or self.testing_mode_bool:
             self.warn_stream("AutoScript not available")
+            self._microscope = None
+            self.is_autoscript = False
             return
         try:
             self._microscope = TemMicroscopeClient()
@@ -168,6 +180,17 @@ class AutoScriptMicroscope(ElectronMicroscope):
             self.set_state(DevState.FAULT)
             self._microscope = None
             self.is_autoscript = False
+
+    def _configure_aperture_adapter(self) -> None:
+        """Select the real adapter only for a successful AutoScript connection."""
+        if self._microscope is not None and getattr(self, "is_autoscript", False):
+            self._aperture_adapter = AutoScriptApertureAdapter(self._microscope)
+            self._aperture_autoscript_available = True
+            self.info_stream("AutoScript aperture adapter initialised")
+        else:
+            self._aperture_adapter = SimulatedApertureBackend()
+            self._aperture_autoscript_available = False
+            self.info_stream("Simulated aperture backend initialised")
 
     def _connect_detector_proxies(self) -> None:
         """Build DeviceProxy objects for each configured detector device."""
@@ -245,6 +268,449 @@ class AutoScriptMicroscope(ElectronMicroscope):
         """
         self._get_stage()
 
+    @staticmethod
+    def _parse_aperture_request(
+        json_request: str,
+        *,
+        require_mechanism: bool,
+        require_name: bool = False,
+    ) -> dict:
+        try:
+            request = json.loads(json_request or "{}")
+        except (json.JSONDecodeError, TypeError) as exc:
+            raise ValueError("Invalid JSON request.") from exc
+        if not isinstance(request, dict):
+            raise ValueError("Aperture request must be a JSON object.")
+
+        mechanism = request.get("mechanism")
+        if require_mechanism and (not isinstance(mechanism, str) or not mechanism):
+            raise ValueError("Aperture request requires a non-empty string 'mechanism'.")
+        if mechanism is not None and not isinstance(mechanism, str):
+            raise ValueError("Aperture request field 'mechanism' must be a string.")
+
+        name = request.get("name")
+        if require_name and (not isinstance(name, str) or not name):
+            raise ValueError("Aperture request requires a non-empty string 'name'.")
+        if name is not None and not isinstance(name, str):
+            raise ValueError("Aperture request field 'name' must be a string.")
+        return request
+
+    @staticmethod
+    def _aperture_response_data(aperture: ApertureInfo | None) -> dict | None:
+        if aperture is None:
+            return None
+        return {
+            "name": aperture.name,
+            "type": aperture.aperture_type,
+            "diameter_m": aperture.diameter_m,
+        }
+
+    def _aperture_response(
+        self,
+        *,
+        ok: bool,
+        action: str,
+        mechanism: str,
+        aperture: ApertureInfo | None = None,
+        insertion_state: str | None = None,
+        error: str | None = None,
+        **extra,
+    ) -> str:
+        payload = {
+            "ok": ok,
+            "action": action,
+            "mechanism": mechanism,
+            "aperture": self._aperture_response_data(aperture),
+            "insertion_state": insertion_state,
+            "autoscript_available": self._aperture_autoscript_available,
+            "error": error,
+        }
+        payload.update(extra)
+        return json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False)
+
+    def _aperture_error(self, action: str, mechanism: str, exc: Exception) -> str:
+        message = str(exc)
+        self.error_stream(
+            f"Aperture action failed: action={action}, mechanism={mechanism!r}, error={message}"
+        )
+        return self._aperture_response(
+            ok=False,
+            action=action,
+            mechanism=mechanism,
+            error=message,
+        )
+
+    def _require_aperture_enabled(self, mechanism: str, action: str) -> None:
+        try:
+            enabled = self._aperture_adapter.is_enabled(mechanism)
+        except (AttributeError, TypeError) as exc:
+            raise RuntimeError(
+                "Aperture status attribute unsupported or missing: "
+                "ApertureMechanism.is_enabled."
+            ) from exc
+        if not enabled:
+            raise RuntimeError(
+                f"Aperture mechanism {mechanism!r} is disabled; "
+                f"refusing to {action}."
+            )
+
+    def _require_aperture_retractable(self, mechanism: str, action: str) -> None:
+        try:
+            retractable = self._aperture_adapter.is_retractable(mechanism)
+        except (AttributeError, TypeError) as exc:
+            raise RuntimeError(
+                "Aperture status attribute unsupported or missing: "
+                "ApertureMechanism.is_retractable."
+            ) from exc
+        if not retractable:
+            raise RuntimeError(
+                f"Aperture mechanism {mechanism!r} is not retractable; "
+                f"refusing to {action}."
+            )
+
+    def _assert_no_live_acquisition_for_aperture_mutation(self) -> None:
+        if getattr(self, "_acquisition_active", False):
+            raise RuntimeError(
+                "Aperture mutation is blocked because acquisition is active."
+            )
+
+    def _precheck_aperture_mutation(
+        self,
+        mechanism: str,
+        action: str,
+        *,
+        require_retractable: bool,
+    ) -> None:
+        self._assert_no_live_acquisition_for_aperture_mutation()
+        self._require_aperture_enabled(mechanism, action)
+        if require_retractable:
+            self._require_aperture_retractable(mechanism, action)
+
+
+    def _precheck_aperture_disable(self, mechanism: str) -> None:
+        try:
+            insertion_state = self._aperture_adapter.get_insertion_state(mechanism)
+        except (AttributeError, TypeError) as exc:
+            raise RuntimeError(
+                "Aperture insertion status unsupported or missing: "
+                "ApertureMechanism.insertion_state."
+            ) from exc
+        if insertion_state != "Retracted":
+            raise RuntimeError(
+                f"Aperture mechanism {mechanism!r} is not safe to disable while "
+                f"insertion_state is {insertion_state!r}; retract it first."
+            )
+
+
+    def _warn_aperture_metadata(self, message: str) -> None:
+        """Log metadata warnings without breaking lightweight unit instances."""
+        if not getattr(self, "_aperture_logging_ready", False):
+            return
+        try:
+            self.warn_stream(message)
+        except Exception:
+            pass
+
+    def _get_aperture_metadata(self) -> dict[str, Any]:
+        """Return a non-fatal snapshot of current aperture state."""
+        using_autoscript = bool(
+            getattr(self, "_aperture_autoscript_available", False)
+        )
+        metadata: dict[str, Any] = {
+            "source": "autoscript" if using_autoscript else "simulation",
+            "reason": (
+                None
+                if using_autoscript
+                else "AutoScript unavailable or testing mode; using simulated aperture state."
+            ),
+            "mechanisms": [],
+            "selected_apertures": {},
+            "insertion_states": {},
+            "errors": {},
+        }
+
+        adapter = getattr(self, "_aperture_adapter", None)
+        if adapter is None:
+            message = "Aperture adapter is not initialised."
+            metadata["source"] = "unavailable"
+            metadata["reason"] = message
+            metadata["errors"]["adapter"] = message
+            self._warn_aperture_metadata(message)
+            return metadata
+
+        try:
+            mechanisms = list(adapter.list_mechanisms())
+            metadata["mechanisms"] = mechanisms
+        except Exception as exc:
+            message = f"Could not list aperture mechanisms: {exc}"
+            metadata["errors"]["adapter"] = message
+            self._warn_aperture_metadata(message)
+            return metadata
+
+        for mechanism in mechanisms:
+            mechanism_errors: list[str] = []
+            selected = None
+            try:
+                apertures = adapter.list_apertures(mechanism)
+                selected = next(
+                    (aperture for aperture in apertures if aperture.selected),
+                    None,
+                )
+            except Exception as exc:
+                mechanism_errors.append(f"selected aperture: {exc}")
+
+            metadata["selected_apertures"][mechanism] = (
+                self._aperture_response_data(selected)
+            )
+
+            try:
+                metadata["insertion_states"][mechanism] = (
+                    adapter.get_insertion_state(mechanism)
+                )
+            except Exception as exc:
+                metadata["insertion_states"][mechanism] = None
+                mechanism_errors.append(f"insertion_state: {exc}")
+
+            if mechanism_errors:
+                message = "; ".join(mechanism_errors)
+                metadata["errors"][mechanism] = message
+                self._warn_aperture_metadata(
+                    f"Could not fully read aperture metadata for {mechanism!r}: {message}"
+                )
+
+        return metadata
+
+    @command(dtype_in=str, dtype_out=str)
+    def aperture_list(self, json_request: str = "{}") -> str:
+        """List available apertures without changing microscope state."""
+        action = "list"
+        mechanism = ""
+        try:
+            request = self._parse_aperture_request(
+                json_request,
+                require_mechanism=False,
+            )
+            mechanism = request.get("mechanism", "")
+            mechanism_names = (
+                [mechanism]
+                if mechanism
+                else self._aperture_adapter.list_mechanisms()
+            )
+            apertures = [
+                self._aperture_response_data(aperture)
+                | {"mechanism": aperture.mechanism, "selected": aperture.selected}
+                for mechanism_name in mechanism_names
+                for aperture in self._aperture_adapter.list_apertures(mechanism_name)
+            ]
+            insertion_state = (
+                self._aperture_adapter.get_insertion_state(mechanism)
+                if mechanism
+                else None
+            )
+            return self._aperture_response(
+                ok=True,
+                action=action,
+                mechanism=mechanism or "all",
+                insertion_state=insertion_state,
+                mechanisms=self._aperture_adapter.list_mechanisms(),
+                apertures=apertures,
+            )
+        except Exception as exc:
+            return self._aperture_error(action, mechanism, exc)
+
+    @command(dtype_in=str, dtype_out=str)
+    def aperture_get_selected(self, json_request: str) -> str:
+        """Return the selected aperture for one explicit mechanism."""
+        action = "get_selected"
+        mechanism = ""
+        try:
+            request = self._parse_aperture_request(json_request, require_mechanism=True)
+            mechanism = request["mechanism"]
+            aperture = self._aperture_adapter.get_selected_aperture(mechanism)
+            return self._aperture_response(
+                ok=True,
+                action=action,
+                mechanism=mechanism,
+                aperture=aperture,
+                insertion_state=self._aperture_adapter.get_insertion_state(mechanism),
+            )
+        except Exception as exc:
+            return self._aperture_error(action, mechanism, exc)
+
+    @command(dtype_in=str, dtype_out=str)
+    def aperture_is_enabled(self, json_request: str) -> str:
+        """Return whether one explicit aperture mechanism is enabled."""
+        action = "is_enabled"
+        mechanism = ""
+        try:
+            request = self._parse_aperture_request(json_request, require_mechanism=True)
+            mechanism = request["mechanism"]
+            return self._aperture_response(
+                ok=True,
+                action=action,
+                mechanism=mechanism,
+                enabled=self._aperture_adapter.is_enabled(mechanism),
+            )
+        except Exception as exc:
+            return self._aperture_error(action, mechanism, exc)
+
+    @command(dtype_in=str, dtype_out=str)
+    def aperture_is_retractable(self, json_request: str) -> str:
+        """Return whether one explicit aperture mechanism is retractable."""
+        action = "is_retractable"
+        mechanism = ""
+        try:
+            request = self._parse_aperture_request(json_request, require_mechanism=True)
+            mechanism = request["mechanism"]
+            return self._aperture_response(
+                ok=True,
+                action=action,
+                mechanism=mechanism,
+                retractable=self._aperture_adapter.is_retractable(mechanism),
+            )
+        except Exception as exc:
+            return self._aperture_error(action, mechanism, exc)
+
+    @command(dtype_in=str, dtype_out=str)
+    def aperture_enable(self, json_request: str) -> str:
+        """Enable one explicit aperture mechanism when AutoScript supports it."""
+        action = "enable"
+        mechanism = ""
+        try:
+            request = self._parse_aperture_request(json_request, require_mechanism=True)
+            mechanism = request["mechanism"]
+            self._assert_no_live_acquisition_for_aperture_mutation()
+            try:
+                enabled = self._aperture_adapter.enable(mechanism)
+            except (AttributeError, TypeError) as exc:
+                raise RuntimeError(
+                    "Unsupported AutoScript aperture operation 'enable': "
+                    "missing documented method ApertureMechanism.enable."
+                ) from exc
+            return self._aperture_response(
+                ok=True,
+                action=action,
+                mechanism=mechanism,
+                enabled=enabled,
+            )
+        except Exception as exc:
+            return self._aperture_error(action, mechanism, exc)
+
+    @command(dtype_in=str, dtype_out=str)
+    def aperture_disable(self, json_request: str) -> str:
+        """Disable one retracted aperture mechanism when AutoScript supports it."""
+        action = "disable"
+        mechanism = ""
+        try:
+            request = self._parse_aperture_request(json_request, require_mechanism=True)
+            mechanism = request["mechanism"]
+            self._assert_no_live_acquisition_for_aperture_mutation()
+            self._precheck_aperture_disable(mechanism)
+            try:
+                enabled = self._aperture_adapter.disable(mechanism)
+            except (AttributeError, TypeError) as exc:
+                raise RuntimeError(
+                    "Unsupported AutoScript aperture operation 'disable': "
+                    "missing documented method ApertureMechanism.disable."
+                ) from exc
+            return self._aperture_response(
+                ok=True,
+                action=action,
+                mechanism=mechanism,
+                enabled=enabled,
+            )
+        except Exception as exc:
+            return self._aperture_error(action, mechanism, exc)
+
+
+    @command(dtype_in=str, dtype_out=str)
+    def aperture_select(self, json_request: str) -> str:
+        """Select an aperture only after an explicit JSON command."""
+        action = "select"
+        mechanism = ""
+        try:
+            request = self._parse_aperture_request(
+                json_request,
+                require_mechanism=True,
+                require_name=False,
+            )
+            mechanism = request["mechanism"]
+            name = request.get("name")
+            if not isinstance(name, str) or not name:
+                raise ValueError("Aperture request requires a non-empty string 'name'.")
+            self.info_stream(
+                f"Aperture change requested: action={action}, mechanism={mechanism!r}, name={name!r}"
+            )
+            self._precheck_aperture_mutation(
+                mechanism,
+                "select aperture",
+                require_retractable=False,
+            )
+            aperture = self._aperture_adapter.select_aperture(mechanism, name)
+            return self._aperture_response(
+                ok=True,
+                action=action,
+                mechanism=mechanism,
+                aperture=aperture,
+                insertion_state=self._aperture_adapter.get_insertion_state(mechanism),
+            )
+        except Exception as exc:
+            return self._aperture_error(action, mechanism, exc)
+
+    @command(dtype_in=str, dtype_out=str)
+    def aperture_insert(self, json_request: str) -> str:
+        """Insert one mechanism only after an explicit JSON command."""
+        action = "insert"
+        mechanism = ""
+        try:
+            request = self._parse_aperture_request(json_request, require_mechanism=True)
+            mechanism = request["mechanism"]
+            self.info_stream(
+                f"Aperture change requested: action={action}, mechanism={mechanism!r}"
+            )
+            self._precheck_aperture_mutation(
+                mechanism,
+                "insert aperture mechanism",
+                require_retractable=True,
+            )
+            insertion_state = self._aperture_adapter.insert_mechanism(mechanism)
+            aperture = self._aperture_adapter.get_selected_aperture(mechanism)
+            return self._aperture_response(
+                ok=True,
+                action=action,
+                mechanism=mechanism,
+                aperture=aperture,
+                insertion_state=insertion_state,
+            )
+        except Exception as exc:
+            return self._aperture_error(action, mechanism, exc)
+
+    @command(dtype_in=str, dtype_out=str)
+    def aperture_retract(self, json_request: str) -> str:
+        """Retract one mechanism only after an explicit JSON command."""
+        action = "retract"
+        mechanism = ""
+        try:
+            request = self._parse_aperture_request(json_request, require_mechanism=True)
+            mechanism = request["mechanism"]
+            self.info_stream(
+                f"Aperture change requested: action={action}, mechanism={mechanism!r}"
+            )
+            self._precheck_aperture_mutation(
+                mechanism,
+                "retract aperture mechanism",
+                require_retractable=True,
+            )
+            insertion_state = self._aperture_adapter.retract_mechanism(mechanism)
+            return self._aperture_response(
+                ok=True,
+                action=action,
+                mechanism=mechanism,
+                insertion_state=insertion_state,
+            )
+        except Exception as exc:
+            return self._aperture_error(action, mechanism, exc)
+
 
     # ------------------------------------------------------------------
     # Internal acquisition helpers
@@ -266,7 +732,15 @@ class AutoScriptMicroscope(ElectronMicroscope):
         if not isinstance(adorned, list):
             adorned = [adorned]
         data_server = self._detector_proxies.get("data")
-        return save_acquisition(self, data_server, "stem_image", detector_list, adorned, output_format=output_format)
+        return save_acquisition(
+            self,
+            data_server,
+            "stem_image",
+            detector_list,
+            adorned,
+            file_attrs={"apertures": self._get_aperture_metadata()},
+            output_format=output_format,
+        )
 
 
     def _acquire_camera_image(self, imsize: int, exposure_time: float, detector: str, readout_area: str) -> str:
@@ -277,7 +751,14 @@ class AutoScriptMicroscope(ElectronMicroscope):
         settings = CameraAcquisitionSettings(camera_detector=detector, size=imsize, exposure_time=exposure_time, fixed_readout_area=readout_area, frame_combining=1)
         adorned = self._microscope.acquisition.acquire_camera_image_advanced(settings)
         data_server = self._detector_proxies.get("data")
-        return save_acquisition(self, data_server, "camera_image", str(detector), adorned)
+        return save_acquisition(
+            self,
+            data_server,
+            "camera_image",
+            str(detector),
+            adorned,
+            file_attrs={"apertures": self._get_aperture_metadata()},
+        )
 
     def _acquire_scanned_data_advanced(self, imsize: int, dwell_time: float, detector: str, scan_region: list[float]) -> str:
         """
@@ -291,7 +772,15 @@ class AutoScriptMicroscope(ElectronMicroscope):
         settings = StemDataSettings(dwell_time=dwell_time, detector_types=[camera_detector], size=imsize, region=Region(RegionCoordinateSystem.RELATIVE, Rectangle(*scan_region)))
         adorned = self._microscope.acquisition.acquire_stem_data_advanced(settings)
         data_server = self._detector_proxies.get("data")
-        return save_acquisition(self, data_server, "stem_data", str(detector), adorned, dataset_name="stem_data")
+        return save_acquisition(
+            self,
+            data_server,
+            "stem_data",
+            str(detector),
+            adorned,
+            dataset_name="stem_data",
+            file_attrs={"apertures": self._get_aperture_metadata()},
+        )
 
     # test: not sure this is how we want to save
     def _acquire_spectrum(self, detector_name: str, exposure_time: float) -> str:
@@ -303,7 +792,15 @@ class AutoScriptMicroscope(ElectronMicroscope):
         settings.exposure_time_type = ExposureTimeType.LIVE_TIME
         spectrum = self._microscope.analysis.eds.acquire_spectrum(settings)
         data_server = self._detector_proxies.get("data")
-        return save_acquisition(self, data_server, "spectrum", detector_name, spectrum, dataset_name="spectrum")
+        return save_acquisition(
+            self,
+            data_server,
+            "spectrum",
+            detector_name,
+            spectrum,
+            dataset_name="spectrum",
+            file_attrs={"apertures": self._get_aperture_metadata()},
+        )
 
     def _place_beam(self, position) -> None:
         """
