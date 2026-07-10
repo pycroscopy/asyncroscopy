@@ -37,6 +37,7 @@ project:
     - title: Operation
       children:
         - file: Operation/run-servers.md
+        - file: Operation/run-server-gui.md
         - file: Operation/troubleshooting.md
     - title: Tiled Server
       children:
@@ -48,7 +49,7 @@ site:
   nav: []
   options:
     logo: null
-    404: 404.md
+  404: 404.md
 
 publish:
   - id: asyncroscopy

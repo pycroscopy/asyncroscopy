@@ -1,0 +1,38 @@
+# asyncroscopy server config — JEOL JEM-F200 (Covalent).
+# Read by startup_scripts/run_servers.py. Mirrors covalent-talos.yaml but swaps
+# the AutoScript instrument for the PyJEM-backed JeolMicroscope.
+#
+#   uv run startup_scripts/run_servers.py --yaml configs/covalent-F200.yaml
+#
+# The instrument is served as 'asyncroscopy/instrument/default'. For the digital
+# twin, use configs/DigitalTwin.yaml (real and simulated scopes are separate
+# configs now). See configs/example.md for the full YAML shape.
+
+instrument:
+  class_name: JeolMicroscope
+  file: asyncroscopy/instruments/electron_microscope/jeol.py
+  description: "JEOL JEM-F200 (S)TEM via PyJEM"
+  hardware_host: 10.46.217.241   # F200 control-server IP; localhost when run on the scope PC
+  hardware_port: 9095
+  timeout_seconds: 120
+
+devices:
+  camera: { module_name: asyncroscopy.instruments.electron_microscope.detectors.camera }
+  data:   { module_name: asyncroscopy.data.data }
+  eds:    { module_name: asyncroscopy.instruments.electron_microscope.detectors.eds }
+  scan:   { module_name: asyncroscopy.instruments.electron_microscope.hardware.scan }
+  stage:  { module_name: asyncroscopy.instruments.electron_microscope.hardware.stage }
+
+tango:
+  host: 127.0.0.1          # set to the F200 PC's IP to reach it from another machine
+  port: 9094
+  reset_database_file: false
+
+tiled:
+  host: 127.0.0.1          # set to the F200 PC's IP for remote notebook access
+  port: 9091
+  acquisition_dir: outputs/tiled_acquisitions
+  autostart: true
+  register_on_startup: false
+
+device_timeout_seconds: 120

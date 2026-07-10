@@ -51,7 +51,7 @@ class TestDigitalTwin:
             stage_signal = int(round((self._stage_position[0] - self._stage_position[1]) * 1e10))
             return np.full((imsize, imsize), stage_signal, dtype=np.int16)
 
-        from asyncroscopy.DigitalTwin import DigitalTwin
+        from asyncroscopy.instruments.electron_microscope.digital_twin import DigitalTwin
 
         monkeypatch.setattr(DigitalTwin, "_render_stem_image", fake_stage_render)
 

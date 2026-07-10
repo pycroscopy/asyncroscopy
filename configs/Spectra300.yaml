@@ -1,49 +1,32 @@
-# Default asyncroscopy server config — Thermo Fisher Spectra 300 TEM.
-# Read by scripts/run_servers.py. Values here reproduce the script's historic
-# built-in defaults, so a headless start equals accepting every prompt.
-#
-#   uv run scripts/run_servers.py --yaml configs/Spectra300.yaml            # real, headless
-#   uv run scripts/run_servers.py --yaml configs/Spectra300.yaml --microscope dt
-
-microscope:
-  class_name: ThermoMicroscope
-  module_name: asyncroscopy.ThermoMicroscope
+instrument:
+  class_name: AutoScriptMicroscope
+  file: asyncroscopy/instruments/electron_microscope/auto_script.py
   description: "Thermo Fisher Spectra 300 TEM"
-  host: 10.46.217.241        # AutoScript endpoint -> microscope's autoscript_host_ip / _port
-  port: 9095
-
-digital_twin:
-  class_name: DigitalTwin
-  module_name: asyncroscopy.DigitalTwin
-  description: "Software digital twin"
-  # No host/port: the bundled twin needs no AutoScript endpoint.
+  hardware_host: 10.46.217.241
+  hardware_port: 9095
+  timeout_seconds: 120
 
 # Support device servers. class_name defaults to the key upper-cased
 # (camera -> CAMERA); add `class_name:` to a device only to override that.
 devices:
-  camera:    { module_name: asyncroscopy.detectors.CAMERA }
-  corrector: { module_name: asyncroscopy.hardware.CORRECTOR }
-  data:      { module_name: asyncroscopy.software.DATA }
-  eds:       { module_name: asyncroscopy.detectors.EDS }
-  flucam:    { module_name: asyncroscopy.detectors.FLUCAM }
-  scan:      { module_name: asyncroscopy.hardware.SCAN }
-  stage:     { module_name: asyncroscopy.hardware.STAGE }
+  camera:    { module_name: asyncroscopy.instruments.electron_microscope.detectors.camera }
+  corrector: { module_name: asyncroscopy.instruments.electron_microscope.hardware.corrector }
+  data:      { module_name: asyncroscopy.data.data }
+  eds:       { module_name: asyncroscopy.instruments.electron_microscope.detectors.eds }
+  flucam:    { module_name: asyncroscopy.instruments.electron_microscope.detectors.flucam }
+  scan:      { module_name: asyncroscopy.instruments.electron_microscope.hardware.scan }
+  stage:     { module_name: asyncroscopy.instruments.electron_microscope.hardware.stage }
 
 tango:
   host: 10.46.217.241
   port: 9094
+  reset_database_file: false
 
 tiled:
   host: 10.46.217.241
   port: 9091
   acquisition_dir: outputs/tiled_acquisitions
   autostart: true
+  register_on_startup: false
 
 device_timeout_seconds: 120
-
-# Reserved for a future commit — run_servers.py does NOT start MCP yet.
-mcp:
-  autostart: false
-  class_name: ThermoMCP
-  http_host: 127.0.0.1
-  http_port: 8000

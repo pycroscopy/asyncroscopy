@@ -1,0 +1,28 @@
+# MCP-only startup config.
+#
+# Start the Tango/device stack first, then run this on the MCP host:
+#
+#   uv run startup_scripts/run_mcp.py --yaml configs/mcp.yaml
+#
+# If MCP runs on a separate computer, set tango.host to the Tango database
+# machine/IP. Set mcp.http_host to 0.0.0.0 when other machines need to connect.
+
+tango:
+  host: localhost
+  port: 9094
+
+mcp:
+  name: Spectra300_MCP
+  transport: streamable-http
+  http_host: 127.0.0.1
+  http_port: 8000
+  data_device_address: asyncroscopy/data/default
+  quiet: true
+  blocked_classes:
+    - DataBase
+    - DServer
+  blocked_functions:
+    "*":
+      - Init
+      - Kill
+      - RestartServer

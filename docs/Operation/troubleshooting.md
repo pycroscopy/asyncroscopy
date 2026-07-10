@@ -30,7 +30,7 @@ Delete the stale `.db` files — both the Tiled catalog db and the Tango databas
 db — then start fresh:
 
 ```bash
-uv run scripts/run_servers.py
+uv run startup_scripts/run_servers.py
 ```
 
 A clean run rebuilds both databases.
@@ -61,13 +61,14 @@ for you), or manually:
 TANGO_HOST=localhost:9094 uv run python -m tango.databaseds.database 2
 ```
 
-If the database server still won't come up within ~2 minutes, delete the Tango
-`.db` file and retry.
+If the database server still won't come up within ~2 minutes, enable
+`tango.reset_database_file: true` in the server YAML or check **Delete
+tango_database.db before start** in the startup GUI, then retry.
 
 ### Servers stop responding (e.g. after repeated `place_beam` calls)
 
-Reported recovery: kill the server notebook kernel, delete the
-`Tango_database.db` file, then start the servers again.
+Reported recovery: kill the server notebook kernel, enable the Tango database
+file reset option, then start the servers again.
 
 ### Unexplained timeouts when connecting from a remote location
 

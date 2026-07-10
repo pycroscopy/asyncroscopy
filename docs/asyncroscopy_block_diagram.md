@@ -14,7 +14,7 @@ MCP("MCP Server"):::orange
 Tango("Tango Database Server"):::orange
 TiledServer("Tiled HTTP<br>data server"):::orange
 
-Thermo("ThermoMicroscope<br>main device server"):::blue
+AutoScriptMicroscope("AutoScriptMicroscope<br>main device server"):::blue
 Twin("DigitalTwin<br>simulation device server"):::purple
 
 Scan("SCAN<br>settings device server"):::blue
@@ -26,7 +26,7 @@ CorrectorServer("CORRECTOR<br>settings device server"):::blue
 DataDevice("DATA<br>Tango data device server"):::blue
 
 AutoScript("AutoScript<br>microscope control server"):::pink
-Microscope("Real Thermo Fisher<br>microscope"):::yellow
+STEMMicroscope("Real Thermo Fisher<br>microscope"):::yellow
 PhysicalStage("Physical Stage"):::yellow
 PhysicalDetectors("Physical Detectors"):::yellow
 PhysicalCorrector("Physical Corrector"):::yellow
@@ -42,7 +42,7 @@ end
 
 subgraph CoreStack["Main Asyncroscopy devices"]
 direction TB
-Thermo
+AutoScriptMicroscope
 Twin
 end
 
@@ -60,7 +60,7 @@ end
 
 subgraph PhysicalStack["Real physical microscope"]
 direction TB
-Microscope
+STEMMicroscope
 PhysicalStage
 PhysicalDetectors
 PhysicalCorrector
@@ -76,7 +76,7 @@ MCP --> Tango
 Notebook --> Tango
 Script --> Tango
 
-Tango --> Thermo
+Tango --> AutoScriptMicroscope
 Tango --> Twin
 
 Tango --> Scan
@@ -87,24 +87,24 @@ Tango --> StageServer
 Tango --> CorrectorServer
 Tango --> DataDevice
 
-Thermo --> Scan
-Thermo --> Camera
-Thermo --> Flucam
-Thermo --> Eds
-Thermo --> StageServer
-Thermo --> CorrectorServer
+AutoScriptMicroscope --> Scan
+AutoScriptMicroscope --> Camera
+AutoScriptMicroscope --> Flucam
+AutoScriptMicroscope --> Eds
+AutoScriptMicroscope --> StageServer
+AutoScriptMicroscope --> CorrectorServer
 
-Thermo --> AutoScript
+AutoScriptMicroscope --> AutoScript
 AutoScript --> Microscope
 Microscope --> PhysicalStage
 Microscope --> PhysicalDetectors
 Microscope --> PhysicalCorrector
 
-PhysicalStage --> Thermo
-PhysicalDetectors --> Thermo
-PhysicalCorrector --> Thermo
+PhysicalStage --> AutoScriptMicroscope
+PhysicalDetectors --> AutoScriptMicroscope
+PhysicalCorrector --> AutoScriptMicroscope
 
-Thermo --> TiledServer
+AutoScriptMicroscope --> TiledServer
 DataDevice --> TiledServer
 DataDevice --> Tango
 Tango --> MCP

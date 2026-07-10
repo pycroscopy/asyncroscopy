@@ -1,7 +1,7 @@
 # """
-# Tests for the Microscope Tango device.
+# Tests for the STEMMicroscope Tango device.
 
-# AutoScript is not available in CI — the Microscope device falls back
+# AutoScript is not available in CI — the STEMMicroscope device falls back
 # to simulation mode, so image shape/dtype assertions are against the
 # simulated output.
 # """

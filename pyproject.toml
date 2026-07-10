@@ -32,10 +32,25 @@ dependencies = [
     #    "autoscript-tem-snippets-tests", -> version 1.17 doesnt have this
     "autoscript-tem-toolkit",
     "thermoscientific-logging",
+    # PyJEM / JEOL (local wheel)
+    "pyjem",
     "aicspylibczi>=3.3.1",
     "jupyter-book>=2.0.0",
     "tiled[all]>=0.2.9",
     "pyyaml>=6.0.3",
+    "pyqt5>=5.15.11,<5.16; sys_platform != 'darwin' or platform_machine != 'arm64'",
+    "pyqt5-qt5==5.15.2; sys_platform == 'win32'",
+    "pyqt6>=6.8,<6.13",
+    "ipympl>=0.10.0",
+    "tifffile>=2026.5.15",
+]
+
+[project.optional-dependencies]
+# Install the abTEM diffraction twin stack with:
+#     uv sync --extra diffraction
+diffraction = [
+    "abtem>=1.0.0",
+    "ase>=3.27.0",
 ]
 
 [tool.setuptools]
@@ -45,7 +60,8 @@ package-dir = { "" = "." }
 include = ["asyncroscopy*"]
 
 [tool.uv.sources]
-autoscript-core = { path = "stubs/v_1.17/autoscript_core-1.3.0-py3-none-any.whl" }
-autoscript-tem-microscope-client = { path = "stubs/v_1.17/autoscript_tem_microscope_client-1.17.0-py3-none-any.whl" }
-autoscript-tem-toolkit = { path = "stubs/v_1.17/autoscript_tem_toolkit-1.17.0-py3-none-any.whl" }
-thermoscientific-logging = { path = "stubs/v_1.17/thermoscientific_logging-1.3.0-py3-none-any.whl" }
+autoscript-core = { path = "stubs/AutoScript_v_1.17/autoscript_core-1.3.0-py3-none-any.whl" }
+autoscript-tem-microscope-client = { path = "stubs/AutoScript_v_1.17/autoscript_tem_microscope_client-1.17.0-py3-none-any.whl" }
+autoscript-tem-toolkit = { path = "stubs/AutoScript_v_1.17/autoscript_tem_toolkit-1.17.0-py3-none-any.whl" }
+thermoscientific-logging = { path = "stubs/AutoScript_v_1.17/thermoscientific_logging-1.3.0-py3-none-any.whl" }
+pyjem = { path = "stubs/PyJEM_v_1.3.0.3564/PyJEM-1.3.0.3564-py3-none-any.whl" }

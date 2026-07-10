@@ -1,1 +1,0 @@
-"""Software service Tango devices."""

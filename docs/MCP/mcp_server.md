@@ -1,135 +1,134 @@
-# MCP Server Documentation
+# Asyncroscopy MCP Server
 
-The [`MCPServer`](../asyncroscopy/mcp/mcp_server.py#L43) is a bridge between a Tango control system and the Model Context Protocol (MCP). It allows LLM agents to interact directly with hardware by exposing Tango device commands as MCP tools.
+The MCP server is a FastMCP HTTP bridge over the live Tango database. It should
+start after the Tango database, support devices, Tiled, and selected instrument
+are ready.
 
+## Start It
 
----
-## What is MCP?
+Start the device stack first:
 
-The [Model Context Protocol (MCP)](https://modelcontextprotocol.io) is an open standard 
-that lets AI agents connect to 
-external tools and data sources through a unified interface. Think of it as a standardized 
-API layer specifically designed for LLM interactions.
-
-MCP defines three core primitives that servers can expose:
-- **Tools**: Executable functions the LLM can invoke (like Tango device commands)
-- **Resources**: Read-only data sources (like configuration or device state)  
-- **Prompts**: Reusable message templates that guide LLM interactions
-
-## Why MCP + Asyncroscopy?
-
-Asyncroscopy uses PyTango to control microscope hardware. The MCPServer automatically 
-discovers every Tango device command in your system and exposes them as MCP tools. This 
-means an LLM agent can query detector settings, move the stage, acquire images, and 
-adjust beam parameters — all through natural language.
-The Asyncroscopy MCP server exposes microscopy hardware (via pyTango) to language models. This enables LLM-driven microscopy workflows without direct hardware knowledge.
-
-## Core Functionality
-
-### 1. Dynamic Device Discovery
-On startup, the server queries the Tango Database to find all exported devices via [`_list_all_devices()`](../asyncroscopy/mcp/mcp_server.py#L103). It then:
-- Filters out infrastructure classes (e.g., `DataBase`, `DServer`) using [`_is_blocked_class()`](../asyncroscopy/mcp/mcp_server.py#L99).
-- Excludes devices or classes specified in the block lists — see [`_is_blocked_function()`](../asyncroscopy/mcp/mcp_server.py#L136).
-- Dynamically queries each device for its available commands in [`_find_tools()`](../asyncroscopy/mcp/mcp_server.py#L469).
-
-### 2. Automatic Tool Generation
-Each discovered Tango command is wrapped into an MCP tool via [`_create_wrapper()`](../asyncroscopy/mcp/mcp_server.py#L393). The server:
-- Maps Tango types to Python types for parameter validation — see [`_tango_type_to_python()`](../asyncroscopy/mcp/mcp_server.py#L247).
-- **Source-Level Introspection**: Uses [`_get_tango_device_class()`](../asyncroscopy/mcp/mcp_server.py#L294) to search specified Python packages (default: `["asyncroscopy"]`) and `inspect` to retrieve real parameter names via [`_get_param_name()`](../asyncroscopy/mcp/mcp_server.py#L372) and docstrings via [`_get_docstring()`](../asyncroscopy/mcp/mcp_server.py#L330) from the source implementation.
-- Handles `DevEncoded` data by base64-encoding the payload for [JSON-safe transport](#data-transport-encoding) — see [`_normalize_command_result()`](../asyncroscopy/mcp/mcp_server.py#L264).
-
----
-
-## Configuration & Customization
-
-### Block Lists
-You can restrict which commands or classes are exposed through the following [`__init__()`](../asyncroscopy/mcp/mcp_server.py#L47) arguments:
-
-- **`blocked_classes`**: List of Tango class names to skip entirely (defaults to `["DataBase", "DServer"]`).
-- **`blocked_functions`**: 
-  - A simple list (e.g., `["Init", "Status"]`) applied globally.
-  - Or a dictionary mapping class names to command lists (e.g. `{"Microscope": ["Connect"]}`).
-  - Use `"*"` as a dictionary key to apply global overrides (e.g. `{"*": ["Init"]}`).
-- **`search_packages`**: List of Python package names to search for Tango Device subclasses when resolving docstrings and parameter names (defaults to `["asyncroscopy"]`).
-
-### Adding Native MCP Tools, Resources, and Prompts
-Beyond dynamic Tango commands, you can add native Python methods directly to the `MCPServer` instance using decorators. These methods are automatically registered during [`setup()`](../asyncroscopy/mcp/mcp_server.py#L531) via [`_register_instance_methods()`](../asyncroscopy/mcp/mcp_server.py#L150).
-
-#### Native Tools
-Use `@tool()` to define custom logic that requires arbitrary Python code.
-
-```python
-from fastmcp.tools import tool
-from asyncroscopy.mcp.mcp_server import MCPServer
-
-class MyCustomMCPServer(MCPServer):
-    @tool()
-    def custom_helper_tool(self, data: str) -> str:
-        """This tool will be automatically registered alongside Tango commands."""
-        return f"Processed: {data}"
+```bash
+uv run startup_scripts/run_servers.py --yaml configs/Spectra300.yaml
+uv run startup_scripts/run_servers.py --yaml configs/STEMDigitalTwin.yaml
 ```
 
-#### Resources
-Use `@resource()` to expose static or dynamic content (like configuration files or documentation) as data sources for LLMs.
+Then start MCP in another terminal or on the MCP computer:
 
-```python
-from fastmcp.resources import resource
-from asyncroscopy.mcp.mcp_server import MCPServer
-
-class MyCustomMCPServer(MCPServer):
-    @resource("config://network")
-    def get_network_config(self) -> str:
-        """Expose current network configuration."""
-        return "TANGO_HOST=localhost:9094"
+```bash
+uv run startup_scripts/run_mcp.py --yaml configs/mcp.yaml
 ```
 
-#### Prompts
-Use `@prompt()` to provide pre-defined templates that help LLMs structure their interactions with the hardware.
+GUI:
 
-```python
-from fastmcp.prompts import prompt
-from asyncroscopy.mcp.mcp_server import MCPServer
-
-class MyCustomMCPServer(MCPServer):
-    @prompt()
-    def optimize_beam_setup(self, voltage: float) -> str:
-        """A prompt template for optimizing beam alignment."""
-        return f"Please check the alignment for {voltage}kV setup and report any deviation."
+```bash
+uv run python startup_guis/mcp_gui.py
 ```
 
----
+The default endpoint is:
 
-(data-transport-encoding)=
-## Data Transport & Encoding
-
-Tango `DevEncoded` commands often return binary data (like images). The [`_normalize_command_result()`](../asyncroscopy/mcp/mcp_server.py#L264) method normalizes these into a standard JSON structure:
-
-```json
-{
-  "encoding": "base64",
-  "metadata": "header_string",
-  "payload": "base64_encoded_binary_data"
-}
+```text
+http://127.0.0.1:8000/mcp
 ```
 
----
+If MCP runs on another computer, set `tango.host` in `configs/mcp.yaml` to the
+Tango database machine and set `mcp.http_host` to the MCP machine's bind address.
+Use `0.0.0.0` when clients on other machines need to connect.
 
-## Running the Server
+## YAML Contract
 
-The server can be started as a standalone process. It requires a connection to a running Tango Database.
+```yaml
+tango:
+  host: localhost
+  port: 9094
 
-```python
-from asyncroscopy.mcp.mcp_server import MCPServer
-
-# Initialize and start the server
-server = MCPServer(
-    name="AsyncroscopyServer",
-    tango_host="localhost",
-    tango_port=9094
-)
-
-# Use server.start() for stdio (default) or server.start_http() for HTTP
-server.start()
+mcp:
+  name: Spectra300_MCP
+  transport: streamable-http
+  http_host: 127.0.0.1
+  http_port: 8000
+  data_device_address: asyncroscopy/data/default
+  quiet: true
+  blocked_classes:
+    - DataBase
+    - DServer
+  blocked_functions:
+    "*":
+      - Init
+      - Kill
+      - RestartServer
 ```
 
-By default, [`start()`](../asyncroscopy/mcp/mcp_server.py#L603) uses `stdio` transport for piping to agents. To expose the server over HTTP, use [`start_http()`](../asyncroscopy/mcp/mcp_server.py#L599) (wraps `host="0.0.0.0"`, `port=8000`).
+`startup_scripts/run_mcp.py` maps this config directly to:
+
+```bash
+uv run python -m asyncroscopy.mcp.mcp_server ...
+```
+
+## MCP GUI
+
+`startup_guis/mcp_gui.py` is a YAML launcher for MCP. It formats the current
+selections into YAML, writes that YAML to `outputs/startup_configs/mcp_gui.yaml`,
+and runs:
+
+```bash
+uv run python startup_scripts/run_mcp.py --yaml outputs/startup_configs/mcp_gui.yaml
+```
+
+The GUI includes a generated YAML preview, terminal output, **Start**, **Stop**,
+and **Save current config**.
+
+## Discovery
+
+`MCPServer` connects to the Tango database, calls `get_device_exported("*")`,
+opens each exported device with `DeviceProxy`, queries `command_list_query()`,
+and registers every non-blocked Tango command as a FastMCP tool.
+
+Tool signatures are built from Tango command types. NumPy values and Tango
+`DevEncoded` payloads are normalized into JSON-safe results.
+
+## Added MCP Tools
+
+For device commands, add a Tango `@command` to the relevant device class. If the
+device is registered and exported, MCP discovers it automatically.
+
+For MCP-only behavior, add it directly to `MCPServer`. The required native tools
+today are:
+
+- `list_devices`
+- `get_data_from_key`
+
+`get_data_from_key` reads an acquired HDF5 DATA/Tiled key and returns dataset
+metadata plus a small preview.
+
+## Blacklisting
+
+Use `blocked_classes` to hide whole Tango classes and `blocked_functions` to hide
+commands. `blocked_functions` accepts global command names, fully qualified
+`Class.command` entries, or class-specific lists:
+
+```yaml
+blocked_functions:
+  "*":
+    - Init
+    - DATA.stop_tiled_server
+  AutoScriptMicroscope:
+    - Disconnect
+```
+
+## Manual MCP Only
+
+If the Tango stack is already running:
+
+```bash
+uv run python -m asyncroscopy.mcp.mcp_server \
+  --name Spectra300_MCP \
+  --tango-host localhost \
+  --tango-port 9094 \
+  --transport streamable-http \
+  --http-host 127.0.0.1 \
+  --http-port 8000 \
+  --data-device-address asyncroscopy/data/default \
+  --blocked-classes-json '["DataBase", "DServer"]' \
+  --blocked-functions-json '{"*": ["Init", "Kill", "RestartServer"]}'
+```

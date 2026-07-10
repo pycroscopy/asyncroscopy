@@ -1,6 +1,6 @@
 # DigitalTwin
 
-`DigitalTwin` is the simulated version of the `ThermoMicroscope`.  
+`DigitalTwin` is the simulated version of the `AutoScriptMicroscope`.  
 It provides realistic-enough image and spectrum behavior for development, testing, and demos without requiring AutoScript or hardware.
 
 ## How it works
@@ -25,6 +25,19 @@ This means moving the stage navigates the sample, and revisiting the same pose c
 - Manual sample regeneration with a new seed
 
 Simulated image and spectrum acquisitions use the same HDF5 writer as the hardware-backed microscope path.
+
+## Diffraction twin
+
+`DigitalTwinDiffraction` is a sibling twin for parked-beam nanoparticle diffraction.
+It keeps the HAADF overview workflow, fixes the field of view at 500 nm, and uses `acquire_camera_image()` to save a simulated diffraction pattern at the current beam position.
+If the beam is not on a nanoparticle, it waits 3 seconds and saves detector noise.
+
+The diffraction simulation uses `abTEM` with a small Au FCC unit cell and `ase` for the structure/rattle step.
+Install that optional environment with:
+
+```bash
+uv sync --extra diffraction
+```
 
 ## Key properties
 

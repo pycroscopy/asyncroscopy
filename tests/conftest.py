@@ -1,8 +1,8 @@
 """
 Shared pytest fixtures for Tango device tests.
 
-Starts BOTH the detector device(s) and the Microscope device in ONE Tango
-test device server using MultiDeviceTestContext, so the Microscope can
+Starts BOTH the detector device(s) and the STEMMicroscope device in ONE Tango
+test device server using MultiDeviceTestContext, so the STEMMicroscope can
 create DeviceProxy connections to detectors by device name.
 
 This avoids:
@@ -17,14 +17,14 @@ import tango
 from tango.test_context import MultiDeviceTestContext
 
 # Import device classes to test
-from asyncroscopy.detectors.CAMERA import CAMERA
-from asyncroscopy.detectors.EDS import EDS
-from asyncroscopy.detectors.FLUCAM import FLUCAM
-from asyncroscopy.hardware.SCAN import SCAN
-from asyncroscopy.hardware.STAGE import STAGE
-from asyncroscopy.DigitalTwin import DigitalTwin
-from asyncroscopy.ThermoMicroscope import ThermoMicroscope
-from asyncroscopy.software.DATA import DATA
+from asyncroscopy.instruments.electron_microscope.detectors.camera import CAMERA
+from asyncroscopy.instruments.electron_microscope.detectors.eds import EDS
+from asyncroscopy.instruments.electron_microscope.detectors.flucam import FLUCAM
+from asyncroscopy.instruments.electron_microscope.hardware.scan import SCAN
+from asyncroscopy.instruments.electron_microscope.hardware.stage import STAGE
+from asyncroscopy.instruments.electron_microscope.digital_twin import DigitalTwin
+from asyncroscopy.instruments.electron_microscope.auto_script import AutoScriptMicroscope
+from asyncroscopy.data.data import DATA
 
 
 class FakeAdornedImage:
@@ -42,9 +42,9 @@ def data_save_dir(tmp_path_factory):
 @pytest.fixture(scope="session")
 def tango_ctx(data_save_dir):
     """
-    One Tango device server hosting SCAN + Microscope together.
+    One Tango device server hosting SCAN + STEMMicroscope together.
 
-    Device names here MUST match what you put into Microscope properties.
+    Device names here MUST match what you put into STEMMicroscope properties.
     """
     devices_info = [
         {
@@ -122,10 +122,10 @@ def tango_ctx(data_save_dir):
         },
 
         {
-            "class": ThermoMicroscope,
+            "class": AutoScriptMicroscope,
             "devices": [
                 {
-                    "name": "asyncroscopy/thermomicroscope/default",
+                    "name": "asyncroscopy/autoscriptmicroscope/default",
                     "properties": {
                         "testing_mode_bool": True,
                         "scan_device_address": "asyncroscopy/scan/default",
@@ -186,24 +186,24 @@ def data_proxy(tango_ctx):
 
 
 @pytest.fixture(scope="session")
-def thermo_proxy(tango_ctx):
-    return tango.DeviceProxy(tango_ctx.get_device_access("asyncroscopy/thermomicroscope/default"))
+def auto_script_proxy(tango_ctx):
+    return tango.DeviceProxy(tango_ctx.get_device_access("asyncroscopy/autoscriptmicroscope/default"))
 
 
 
 @pytest.fixture
 def patched_single_image(monkeypatch: pytest.MonkeyPatch) -> None:
     """
-    Patch ThermoMicroscope._acquire_scanned_image so acquire_scanned_image() works
+    Patch AutoScriptMicroscope._acquire_scanned_image so acquire_scanned_image() works
     without AutoScript/hardware.
     """
-    def fake_acquire(self, imsize: int, dwell_time: float, detector_list: list = ["haadf"], scan_region: list[float] = [0.0, 0.0, 1.0, 1.0]):
+    def fake_acquire(self, imsize: int, dwell_time: float, detector_list: list = ["haadf"], scan_region: list[float] = [0.0, 0.0, 1.0, 1.0], output_format: str = ".h5"):
         # Deterministic image makes tests stable
         arr = np.arange(imsize * imsize, dtype=np.uint16)
         return FakeAdornedImage(arr.reshape(imsize, imsize))
 
     monkeypatch.setattr(
-        ThermoMicroscope,
+        AutoScriptMicroscope,
         "_acquire_scanned_image",
         fake_acquire,
     )
@@ -218,7 +218,7 @@ def patched_single_image(monkeypatch: pytest.MonkeyPatch) -> None:
 def patched_path_acquisition(monkeypatch: pytest.MonkeyPatch, tmp_path):
     calls = []
 
-    def fake_acquire(self, imsize: int, dwell_time: float, detector_list: list = ["haadf"], scan_region: list[float] = [0.0, 0.0, 1.0, 1.0]):
+    def fake_acquire(self, imsize: int, dwell_time: float, detector_list: list = ["haadf"], scan_region: list[float] = [0.0, 0.0, 1.0, 1.0], output_format: str = ".h5"):
         calls.append(
             {
                 "imsize": imsize,
@@ -231,7 +231,7 @@ def patched_path_acquisition(monkeypatch: pytest.MonkeyPatch, tmp_path):
         path.write_bytes(b"fake-h5")
         return str(path)
 
-    monkeypatch.setattr(ThermoMicroscope, "_acquire_scanned_image", fake_acquire)
+    monkeypatch.setattr(AutoScriptMicroscope, "_acquire_scanned_image", fake_acquire)
     return calls
 
 
@@ -239,7 +239,7 @@ def patched_path_acquisition(monkeypatch: pytest.MonkeyPatch, tmp_path):
 def patched_scanned_path_acquisition(monkeypatch: pytest.MonkeyPatch, tmp_path):
     calls = []
 
-    def fake_acquire(self, imsize: int, dwell_time: float, detector_list: list = ["haadf"], scan_region: list[float] = [0.0, 0.0, 1.0, 1.0]):
+    def fake_acquire(self, imsize: int, dwell_time: float, detector_list: list = ["haadf"], scan_region: list[float] = [0.0, 0.0, 1.0, 1.0], output_format: str = ".h5"):
         calls.append(
             {
                 "imsize": imsize,
@@ -252,7 +252,7 @@ def patched_scanned_path_acquisition(monkeypatch: pytest.MonkeyPatch, tmp_path):
         path.write_bytes(b"fake-stem-h5")
         return str(path)
 
-    monkeypatch.setattr(ThermoMicroscope, "_acquire_scanned_image", fake_acquire)
+    monkeypatch.setattr(AutoScriptMicroscope, "_acquire_scanned_image", fake_acquire)
     return calls
 
 
@@ -277,7 +277,7 @@ def patched_scanned_data_acquisition(monkeypatch: pytest.MonkeyPatch):
         )
         return "fake-stem-data-key"
 
-    monkeypatch.setattr(ThermoMicroscope, "_acquire_scanned_data_advanced", fake_acquire)
+    monkeypatch.setattr(AutoScriptMicroscope, "_acquire_scanned_data_advanced", fake_acquire)
     return calls
 
 
@@ -298,7 +298,7 @@ def patched_camera_path_acquisition(monkeypatch: pytest.MonkeyPatch, tmp_path):
         path.write_bytes(b"fake-camera-h5")
         return str(path)
 
-    monkeypatch.setattr(ThermoMicroscope, "_acquire_camera_image", fake_acquire)
+    monkeypatch.setattr(AutoScriptMicroscope, "_acquire_camera_image", fake_acquire)
     return calls
 
 
@@ -312,5 +312,5 @@ def patched_spectrum_path_acquisition(monkeypatch: pytest.MonkeyPatch, tmp_path)
         path.write_bytes(b"fake-spectrum-h5")
         return str(path)
 
-    monkeypatch.setattr(ThermoMicroscope, "_acquire_spectrum", fake_acquire)
+    monkeypatch.setattr(AutoScriptMicroscope, "_acquire_spectrum", fake_acquire)
     return calls

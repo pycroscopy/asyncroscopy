@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 import tango
 
-from asyncroscopy.software.DATA import DATA
+from asyncroscopy.data.data import DATA, _catalog_database_uri
 
 
 class TestDataDevice:
@@ -72,10 +72,10 @@ class TestDataDevice:
         data_proxy.port = 9091
         data_proxy.save_path = str(tmp_path)
         monkeypatch.setattr(DATA, "_tiled_alive", fake_alive)
-        monkeypatch.setattr(DATA, "_tiled_executable", lambda self: "tiled")
-        monkeypatch.setattr("asyncroscopy.software.DATA.subprocess.Popen", fake_popen)
+        monkeypatch.setattr(DATA, "_tiled_command", lambda self: ["python", "-m", "tiled"])
+        monkeypatch.setattr("asyncroscopy.data.data.subprocess.Popen", fake_popen)
         monkeypatch.setattr(
-            "asyncroscopy.software.DATA.subprocess.run",
+            "asyncroscopy.data.data.subprocess.run",
             lambda command, **_: (
                 run_commands.append(command)
                 or type("Result", (), {"returncode": 0, "stdout": ""})()
@@ -85,8 +85,10 @@ class TestDataDevice:
         returned = json.loads(data_proxy.start_tiled_server())
 
         assert returned["tiled_server"] == "yes"
-        key_value = popen_calls[0]["command"][8]
+        command_prefix = ["python", "-m"]
+        key_value = popen_calls[0]["command"][10]
         expected_command = [
+            *command_prefix,
             "tiled",
             "serve",
             "catalog",
@@ -105,11 +107,13 @@ class TestDataDevice:
         assert len(popen_calls) == 1
         actual_command = popen_calls[0]["command"]
 
-        assert actual_command[:3] == expected_command[:3]
-        assert Path(actual_command[3]) == Path(expected_command[3])
-        assert actual_command[4] == expected_command[4]
-        assert Path(actual_command[5]) == Path(expected_command[5])
-        assert actual_command[6:] == expected_command[6:]
+        expected_catalog = _catalog_database_uri(tmp_path / ".asyncroscopy_tiled_catalog.db")
+
+        assert actual_command[:5] == expected_command[:5]
+        assert actual_command[5] == expected_catalog
+        assert actual_command[6] == expected_command[6]
+        assert Path(actual_command[7]) == Path(expected_command[7])
+        assert actual_command[8:] == expected_command[8:]
 
         assert popen_calls[0]["kwargs"] == {
             "stdout": subprocess.DEVNULL,
@@ -118,13 +122,79 @@ class TestDataDevice:
         }
 
         assert len(run_commands) == 1
-        assert run_commands[0][:4] == [
+        assert run_commands[0][:6] == [
+            *command_prefix,
             "tiled",
             "catalog",
             "init",
             "--if-not-exists",
         ]
-        assert Path(run_commands[0][4]) == Path(tmp_path / ".asyncroscopy_tiled_catalog.db")
+        assert run_commands[0][6] == expected_catalog
+        data_proxy.stop_tiled_server()
+
+    def test_catalog_database_uri_uses_sqlite_uri_for_windows_drive_path(self) -> None:
+        assert (
+            _catalog_database_uri("C:/tiled_catalog_test/.asyncroscopy_tiled_catalog.db")
+            == "sqlite:///C:/tiled_catalog_test/.asyncroscopy_tiled_catalog.db"
+        )
+        assert (
+            _catalog_database_uri("C:\\tiled_catalog_test\\.asyncroscopy_tiled_catalog.db")
+            == "sqlite:///C:/tiled_catalog_test/.asyncroscopy_tiled_catalog.db"
+        )
+
+    def test_start_tiled_server_uses_sqlite_uri_for_windows_catalog(
+        self,
+        data_proxy: tango.DeviceProxy,
+        monkeypatch,
+    ) -> None:
+        calls = []
+        popen_calls = []
+        run_commands = []
+
+        def fake_alive(self):
+            calls.append(None)
+            return len(calls) > 1
+
+        class FakeProcess:
+            def poll(self):
+                return None
+
+            def terminate(self):
+                pass
+
+            def wait(self, timeout):
+                return 0
+
+            def kill(self):
+                pass
+
+        monkeypatch.setattr(DATA, "_tiled_alive", fake_alive)
+        monkeypatch.setattr(DATA, "_tiled_command", lambda self: ["python", "-m", "tiled"])
+        monkeypatch.setattr("asyncroscopy.data.data.subprocess.Popen", lambda command, **kwargs: popen_calls.append(command) or FakeProcess())
+        monkeypatch.setattr(
+            "asyncroscopy.data.data.subprocess.run",
+            lambda command, **_: (
+                run_commands.append(command)
+                or type("Result", (), {"returncode": 0, "stdout": ""})()
+            ),
+        )
+        # The Windows drive path below is fed only to exercise the
+        # drive-path -> sqlite-URI branch; neutralize the mkdir side effect so
+        # the test does not depend on the path being creatable (a non-admin user
+        # cannot create directories under C:\, and the path can't exist on Linux).
+        monkeypatch.setattr("asyncroscopy.data.data._ensure_directory", lambda path: None)
+
+        data_proxy.host = "127.0.0.1"
+        data_proxy.port = 9091
+        data_proxy.save_path = "C:/tiled_catalog_test"
+        calls.clear()
+
+        returned = json.loads(data_proxy.start_tiled_server())
+
+        expected_catalog = "sqlite:///C:/tiled_catalog_test/.asyncroscopy_tiled_catalog.db"
+        assert returned["tiled_server"] == "yes"
+        assert run_commands[0][6] == expected_catalog
+        assert popen_calls[0][5] == expected_catalog
         data_proxy.stop_tiled_server()
 
     def test_register_path_registers_single_file(
@@ -145,13 +215,39 @@ class TestDataDevice:
         async def fake_register(client, path, **kwargs):
             registrations.append(path)
 
-        monkeypatch.setattr("asyncroscopy.software.DATA.from_uri", fake_from_uri)
-        monkeypatch.setattr("asyncroscopy.software.DATA.register", fake_register)
+        monkeypatch.setattr("asyncroscopy.data.data.from_uri", fake_from_uri)
+        monkeypatch.setattr("asyncroscopy.data.data.register", fake_register)
 
         result = data_proxy.register_path(str(saved))
 
         assert result == "frame.h5"
         assert registrations == [str(saved)]
+
+    def test_register_save_path_registers_configured_directory(
+        self,
+        data_proxy: tango.DeviceProxy,
+        monkeypatch,
+        tmp_path,
+    ) -> None:
+        registrations = []
+        data_proxy.host = "127.0.0.1"
+        data_proxy.port = 9091
+        data_proxy.save_path = str(tmp_path)
+
+        def fake_from_uri(*args, **kwargs):
+            return object()
+
+        async def fake_register(client, path, **kwargs):
+            registrations.append(path)
+
+        monkeypatch.setattr("asyncroscopy.data.data.from_uri", fake_from_uri)
+        monkeypatch.setattr("asyncroscopy.data.data.register", fake_register)
+
+        result = json.loads(data_proxy.register_save_path())
+
+        assert result["registered_path"] == str(tmp_path)
+        assert result["tiled_server_status"] == "running; registered save path"
+        assert registrations == [str(tmp_path)]
 
     def test_register_path_returns_windows_tiled_key(
         self,
@@ -168,8 +264,8 @@ class TestDataDevice:
         async def fake_register(*args, **kwargs):
             return None
 
-        monkeypatch.setattr("asyncroscopy.software.DATA.from_uri", fake_from_uri)
-        monkeypatch.setattr("asyncroscopy.software.DATA.register", fake_register)
+        monkeypatch.setattr("asyncroscopy.data.data.from_uri", fake_from_uri)
+        monkeypatch.setattr("asyncroscopy.data.data.register", fake_register)
 
         assert data_proxy.register_path(windows_path) == "frame.h5"
 
@@ -206,9 +302,9 @@ class TestDataDevice:
         async def fake_sleep(seconds):
             sleeps.append(seconds)
 
-        monkeypatch.setattr("asyncroscopy.software.DATA.from_uri", fake_from_uri)
-        monkeypatch.setattr("asyncroscopy.software.DATA.register", fake_register)
-        monkeypatch.setattr("asyncroscopy.software.DATA.asyncio.sleep", fake_sleep)
+        monkeypatch.setattr("asyncroscopy.data.data.from_uri", fake_from_uri)
+        monkeypatch.setattr("asyncroscopy.data.data.register", fake_register)
+        monkeypatch.setattr("asyncroscopy.data.data.asyncio.sleep", fake_sleep)
 
         assert data_proxy.register_path(str(saved)) == "frame.h5"
         assert fake_client.calls == 3
@@ -252,10 +348,10 @@ class TestDataDevice:
 
         run_commands = []
         monkeypatch.setattr(DATA, "_tiled_alive", fake_alive)
-        monkeypatch.setattr(DATA, "_tiled_executable", lambda self: "tiled")
-        monkeypatch.setattr("asyncroscopy.software.DATA.subprocess.Popen", fake_popen)
+        monkeypatch.setattr(DATA, "_tiled_command", lambda self: ["python", "-m", "tiled"])
+        monkeypatch.setattr("asyncroscopy.data.data.subprocess.Popen", fake_popen)
         monkeypatch.setattr(
-            "asyncroscopy.software.DATA.subprocess.run",
+            "asyncroscopy.data.data.subprocess.run",
             lambda command, **_: (
                 run_commands.append(command)
                 or type("Result", (), {"returncode": 0, "stdout": ""})()
@@ -272,7 +368,7 @@ class TestDataDevice:
 
 
         assert processes[0].terminated is True
-        assert [Path(call["command"][5]) for call in popen_calls] == [Path(first_path), Path(second_path)]
+        assert [Path(call["command"][7]) for call in popen_calls] == [Path(first_path), Path(second_path)]
         assert Path(config["tiled_server_serving"]) == Path(second_path)
         assert config["tiled_server_status"] == "running; serving path; files register manually"
 
@@ -291,8 +387,8 @@ class TestDataDevice:
         async def fake_register(*args, **kwargs):
             raise FileNotFoundError(requested_path)
 
-        monkeypatch.setattr("asyncroscopy.software.DATA.from_uri", lambda *args, **kwargs: object())
-        monkeypatch.setattr("asyncroscopy.software.DATA.register", fake_register)
+        monkeypatch.setattr("asyncroscopy.data.data.from_uri", lambda *args, **kwargs: object())
+        monkeypatch.setattr("asyncroscopy.data.data.register", fake_register)
 
         with pytest.raises(tango.DevFailed) as exc_info:
             data_proxy.register_path(str(requested_path))

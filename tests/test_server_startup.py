@@ -153,11 +153,11 @@ def test_can_start_scan_data_and_microscope_servers(tango_database, tmp_path) ->
 
     scan_device = "asyncroscopy/scan/default"
     data_device = "asyncroscopy/data/default"
-    microscope_device = "asyncroscopy/microscope/default"
+    microscope_device = "asyncroscopy/instrument/default"
 
     add_device(db, "SCAN/scan_instance", "SCAN", scan_device)
     add_device(db, "DATA/data_instance", "DATA", data_device)
-    add_device(db, "ThermoMicroscope/microscope_instance", "ThermoMicroscope", microscope_device)
+    add_device(db, "AutoScriptMicroscope/microscope_instance", "AutoScriptMicroscope", microscope_device)
     db.put_device_property(
         microscope_device,
         {
@@ -172,15 +172,15 @@ def test_can_start_scan_data_and_microscope_servers(tango_database, tmp_path) ->
     )
 
     managed = [
-        start_device_server("asyncroscopy.hardware.SCAN", "scan_instance", env),
-        start_device_server("asyncroscopy.software.DATA", "data_instance", env),
+        start_device_server("asyncroscopy.instruments.electron_microscope.hardware.scan", "scan_instance", env),
+        start_device_server("asyncroscopy.data.data", "data_instance", env),
     ]
 
     try:
         for device in [scan_device, data_device]:
             wait_for_device(host, port, device, timeout=20)
 
-        managed.append(start_device_server("asyncroscopy.ThermoMicroscope", "microscope_instance", env))
+        managed.append(start_device_server("asyncroscopy.instruments.electron_microscope.auto_script", "microscope_instance", env))
         wait_for_device(host, port, microscope_device, timeout=20)
 
         scan = tango.DeviceProxy(device_url(host, port, scan_device))
