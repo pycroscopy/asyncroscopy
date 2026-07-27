@@ -69,6 +69,10 @@ localagent = [
     "langchain-huggingface",
 ]
 
+ollama = [
+    "langchain_ollama"
+]
+
 [tool.setuptools]
 package-dir = { "" = "." }
 
