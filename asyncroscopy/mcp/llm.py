@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import signal
 import sys
 import time
 import urllib.request
@@ -26,10 +27,16 @@ class LLM(Device):
     max_steps = attribute(label="Max Steps", dtype=int, access=tango.AttrWriteType.READ_WRITE)
 
     def init_device(self) -> None:
-        """Initialize the Tango device."""
+        """Initialize the Tango device and pre-warm model into VRAM."""
         Device.init_device(self)
         self.set_state(tango.DevState.INIT)
         self._max_steps = 5
+
+        signal.signal(signal.SIGINT, signal.SIG_DFL)
+
+        # Create one persistent loop attached to the device instance
+        self._loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self._loop)
 
         try:
             self.ensure_ollama_running()
@@ -39,6 +46,13 @@ class LLM(Device):
                 reasoning=False,
             )
             
+            # Pre-warm the model into GPU VRAM before setting state to ON
+            print("\n[SYSTEM]: Pre-warming Ollama model into VRAM (Cold Start)...")
+            sys.stdout.flush()
+            start_warmup = time.time()
+            self._loop.run_until_complete(self._model.ainvoke(" "))
+            print(f"[SYSTEM]: Model pre-warmed in {time.time() - start_warmup:.2f}s! Device ready.")
+            
             self.set_state(tango.DevState.ON)
             self.info_stream(f"LLM initialized with model: {self.ollama_model}")
             
@@ -46,6 +60,15 @@ class LLM(Device):
             self.set_state(tango.DevState.FAULT)
             self.set_status(f"Initialization failed: {e}")
             self.error_stream(f"Failed to start: {e}")
+
+    def delete_device(self) -> None:
+        """Clean shutdown hook called when Tango server stops."""
+        try:
+            if hasattr(self, "_loop") and not self._loop.is_closed():
+                self._loop.close()
+        except Exception:
+            pass
+        super().delete_device()
 
     def read_max_steps(self) -> int:
         return self._max_steps
@@ -86,27 +109,14 @@ class LLM(Device):
     @command(dtype_in=str, dtype_out=str)
     def Query(self, prompt: str) -> str:
         self.set_state(tango.DevState.RUNNING)
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
         try:
-            return loop.run_until_complete(self._run_agent(prompt))
+            return self._loop.run_until_complete(self._run_agent(prompt))
         except Exception as e:
             err_msg = f"Agent execution failed: {e}"
             print(f"\n[CRITICAL ERROR]: {err_msg}")
             return err_msg
         finally:
-            try:
-                pending = asyncio.all_tasks(loop)
-                for task in pending:
-                    task.cancel()
-                if pending:
-                    loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
-            except Exception:
-                pass
-            finally:
-                loop.close()
-                asyncio.set_event_loop(None)
-                self.set_state(tango.DevState.ON)
+            self.set_state(tango.DevState.ON)
 
     async def _run_agent(self, prompt: str) -> str:
         print("\n[SYSTEM]: Connecting to MCP Server...")
