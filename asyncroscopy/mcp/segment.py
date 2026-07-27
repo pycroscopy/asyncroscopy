@@ -17,6 +17,7 @@ except ImportError:
     
     class SEGMENTATION(Device): 
         model_size = device_property(dtype=str, default_value="facebook/sam2-hiera-large", doc="HuggingFace model ID for SAM 2")
+        points_per_side = attribute(dtype=int, access= AttrWriteType.READ_WRITE, doc="Grid density for automatic mask generation",)
 
         def init_device(self) -> None:
         """Initialize the segmentation device."""
@@ -38,15 +39,14 @@ except ImportError:
             self.set_state(tango.DevState.FAULT)
             self.set_status(f"Initialization failed: {e}")
 
-@attribute(dtype=str, doc ="Statistics of segmented areas")
-def area_stats(self) -> str:
-    """Return the statistics of segmented areas as a JSON string."""
-    return json.dumps(self._area_stats)
+            def read_points_per_side(self) -> int:
+                return self._points_per_side
+            
+            def write_points_per_side(self, value: int) -> None:
+                return self._points_per_side = value
 
-@attribute(dtype=int, access= AttrWriteType.READ_WRITE, doc="Grid density for automatic mask generation",)
+    @attribute(dtype=str, doc ="Statistics of segmented areas")
+    def area_stats(self) -> str:
+        """Return the statistics of segmented areas as a JSON string."""
+        return json.dumps(self._area_stats)
 
-def read_points_per_side(self) -> int:
-    return self._points_per_side
-
-def write_points_per_side(self, value: int) -> None:
-    self._points_per_side = value
