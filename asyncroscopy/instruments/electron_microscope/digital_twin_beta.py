@@ -652,11 +652,11 @@ class DigitalTwinBeta(ElectronMicroscope):
 
 
     def _get_stage(self):
-        """Return current stage position as (x, y, z, a, b) in meters."""
+        """Return current stage position as [x, y, z, alpha, beta], with tilts in degrees."""
         return self._stage_position
     
     def _move_stage(self, position):
-        """Move stage to specified position (x, y, z, a, b) in meters."""
+        """Move stage to [x, y, z, alpha, beta], with x/y/z in meters and tilts in degrees."""
         self.old_pos = self._stage_position
 
         # shift the particle records/ atoms object positions by this much, negative

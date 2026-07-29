@@ -24,8 +24,8 @@ project:
         - file: dev_guide.md
     - title: Microscopy
       children:
-        - file: Microscopy/modify_base_microscope.md
-        - file: Microscopy/modify_thermo_microscope.md
+        - file: Microscopy/modify_auto_script_microscope.md
+        - file: Microscopy/modify_base_electron_microscope.md
     - title: Adding New Hardware
       children:
         - file: Adding_New_Hardware/add_detector.md

@@ -1,8 +1,9 @@
 instrument:
-  class_name: DigitalTwinDiffraction
-  file: asyncroscopy/instruments/electron_microscope/digital_twin_diffraction.py
-  description: Thermo Fisher Spectra 300 TEM
+  class_name: DigitalTwin
+  file: asyncroscopy/instruments/electron_microscope/digital_twin.py
+  description: "Test Digital Twin"
   timeout_seconds: 120
+
 devices:
   camera:
     module_name: asyncroscopy.instruments.electron_microscope.detectors.camera
@@ -13,15 +14,19 @@ devices:
   scan:
     module_name: asyncroscopy.instruments.electron_microscope.hardware.scan
   stage:
-    module_name: asyncroscopy.instruments.electron_microscope.hardware.stage
+    class_name: TestStage
+    module_name: asyncroscopy.instruments.electron_microscope.hardware.TestStage
+
 tango:
-  host: 127.0.0.1
+  host: localhost
   port: 9094
-  reset_database_file: true
+  reset_database_file: false
+
 tiled:
-  host: 127.0.0.1
+  host: localhost
   port: 9091
   acquisition_dir: outputs/tiled_acquisitions
   autostart: true
   register_on_startup: false
+
 device_timeout_seconds: 120

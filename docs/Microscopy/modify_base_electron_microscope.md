@@ -21,7 +21,7 @@ If you're editing this class, you're usually doing one of these:
    Add a thin `@command` that validates input, reads any settings from a
    detector proxy, then calls a vendor `_helper`. Existing groups:
    - acquisition — `acquire_scanned_image`, `acquire_spectrum`,
-     `acquire_camera_image`, `acquire_flucam_image`,
+     `acquire_camera_image`,
      `acquire_scanned_data_advanced`
    - beam / optics — `place_beam`, `place_beam_list`, `blank_beam`,
      `unblank_beam`, `set_defocus` / `get_defocus`, `set_image_shift`,
@@ -45,6 +45,10 @@ If you're editing this class, you're usually doing one of these:
    - **Note:** `acquire_spectrum` delegates to `_acquire_spectrum`, which is
      *not* declared on the base — it's defined only in the vendor subclass.
      If you add a new vendor, you must provide `_acquire_spectrum` yourself.
+
+   Stage positions use `[x, y, z, alpha, beta]`; x/y/z are meters and alpha/beta
+   are degrees in the public Tango API. Vendor helpers should convert only at
+   the hardware boundary if the vendor API expects another unit.
 
 5. **Changing the return / transport convention**
    Acquisition commands return a Tiled key string; the actual save happens in

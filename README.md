@@ -1,83 +1,98 @@
-# Asyncroscopy: Enabling smart microscopy via asynchronous servers
+# Asyncroscopy
 
-<div class="d-flex justify-content-between">
-  <img src="docs/images/architecturev1.png" width="33.5%" />
-  <img src="docs/images/architecturev2.png" width="57%" />
+**Asynchronous control framework for smart microscopy.** Built on `PyTango` to be hardware-agnostic.
+
+<div class="d-flex justify-content-between align-items-center w-100">
+  <img src="docs/images/architecturev1.png" style="width: 36%;" alt="Architecture V1" />
+  <img src="docs/images/architecturev2.png" style="width: 60%;" alt="Architecture V2" />
 </div>
 
-Note: `main` branch now contains the PyTango-based architecture. The previous Twisted-based implementation is preserved in the `twisted-legacy` branch for reference.
----
-
-# Q. Are you here to just directly dive in and do some hands on??
-see: [Tutorial notebook](notebooks/1_Client_tutorial.ipynb)
-
----
-
-
-## Project layout(Updated on 20th Feb 2026)
-
-```
-.
-├── src/
-│   ├── ElectronMicroscope.py      # Electron microscope base device and acquisition commands
-│   ├── detectors/
-│   │   ├── HAADF.py               # HAADF detector settings device
-│   │   ├── EELS.py                # EELS detector settings device (stub)
-│   │   ├── EDS.py                 # EDS detector settings device (stub)
-│   │   └── CEOS.py                # CEOS detector settings device (stub)
-│   ├── hardware/
-│   │   ├── STAGE.py               # Stage position and movement device
-│   │   └── BEAM.py                # Beam blanking and current device
-│   └── acquisition/
-│       └── advanced_acquisition.py  # Multi-detector acquisition helpers (stub)
-├── tests/
-│   ├── conftest.py                # Shared pytest fixtures (DeviceTestContext proxies)
-│   ├── test_microscope.py         # STEMMicroscope device tests
-│   ├── test_acquisition.py        # Acquisition tests
-│   └── detectors/
-│       └── test_HAADF.py          # HAADF device tests
-├── notebooks/
-│   └── Client.ipynb               # Tutorial: connect → configure → acquire → display
-├── llm-context/                   # AutoScript and PyTango API corpus for LLM-assisted development
-├── AS_commands.txt                # AutoScript API reference snippets
-└── pyproject.toml
-```
-
-### Contributing and Design principle
-See - docs/dev_guide.md
-
-## Requirements and Installation
-
-### Core installation (simulation mode)
+## Quick Start
 
 ```bash
+# Install all dependencies
 uv sync
+
+# Start the server stack with a configuration
+uv run startup_scripts/run_servers.py --yaml configs/Spectra300.yaml
+
+# Or use the DigitalTwin (no hardware required)
+uv run startup_scripts/run_servers.py --yaml configs/DigitalTwin.yaml
 ```
 
-This installs `asyncroscopy` and all core dependencies. The vendor wheels are
-local, version-pinned, and resolved via `[tool.uv.sources]` in `pyproject.toml`
-(AutoScript under `stubs/AutoScript_v_1.17/`, PyJEM under
-`stubs/PyJEM_v_1.3.0.3564/`). AutoScript/PyJEM hardware is not required—the
-framework falls back to simulated acquisition automatically.
+Start the MCP server in a second terminal for agent/AI integration:
+```bash
+uv run startup_scripts/run_mcp.py --yaml configs/mcp.yaml
+```
 
-### Hardware installation (Thermo Fisher AutoScript)
+For interactive GUI-based startup:
+```bash
+uv run startup_guis/server_gui.py
+uv run startup_guis/mcp_gui.py
+```
 
-By default, the project uses **stubs** (metadata-only wheels) in the `stubs/` directory to satisfy
-dependency resolution. These stubs do **not** contain any proprietary code.
+## Project Structure
 
-If you have access to the real proprietary AutoScript wheels, place them in a local directory
-(e.g., `./hardware_wheels/`) and install them over the stubs:
+```text
+asyncroscopy/
+├── data/              # Data management device
+├── instruments/       # Hardware device implementations
+└── mcp/               # FastMCP server for AI agents
+```
+
+## Configuration Files (`configs/`)
+
+| Config | Purpose |
+|--------|---------|
+| `Spectra300.yaml` | Real Thermo Fisher Spectra 300 setup |
+| `DigitalTwin.yaml` | Simulated microscope for development/testing |
+| `diffraction.yaml` | DigitalTwin with diffraction simulation |
+| `mcp.yaml` | MCP server configuration (not hardware) |
+
+These are some examples of the available configs, which define the instrument class, supporting devices, Tango connection, and Tiled settings.
+
+## Optional Dependencies
 
 ```bash
-uv pip install ./hardware_wheels/*.whl --force-reinstall
+# Diffraction simulation (abTEM-based)
+uv sync --extra diffraction
+
+# AI agent support (LangChain/OpenAI)
+uv sync --extra agent
+
+# Local AI models via HuggingFace transformers (requires --extra agent)
+uv sync --extra agent --extra localagent
 ```
 
-> [!WARNING]
-> Never place your real wheels in the `stubs/` directory, as they would be tracked by Git.
-> Always use a separate, ignored directory for real hardware files.
-
-## Running tests
+## Running Tests
 
 ```bash
 uv run pytest tests/ -v
 ```
+
+## Architecture
+
+- **Abstraction Layer:** Instruments are defined as abstract base classes, with specific implementations for different hardware. As such, models can be defined for various microscopes, digital twins, etc.
+- **Device Orchestration:** Supporting devices (camera, EDS, stage, etc.) are initialized first and linked to the instrument via Tango properties.
+- **Execution Order:** The instrument serves as the final integration point, instantiated only after all prerequisite supporting devices are running.
+- **Data:** Data from devices is saved to Tiled.
+
+## Documentation
+
+Refer to the [asyncroscopy documentation](https://pycroscopy.github.io/asyncroscopy/).
+
+## Notebooks
+
+Various example workflows in `notebooks/`, including:
+
+- `00_Testing.ipynb` - Connection tests
+- `01_Aberrations.ipynb` - Probe aberration controls
+- `02_Image_Acquisition.ipynb` - HAADF image acquisition
+- `03_Stage_Movement_Sample_Map.ipynb` - Stage navigation
+- `04_Image_EDS_Point_Spectra.ipynb` - EDS spectrum acquisition
+- `05_Digital_Twin_EDS.ipynb` - DigitalTwin EDS simulation
+- `06_Digital_Twin_Tilt.ipynb` - DigitalTwin tilt control
+- `11_Test_AI_Agent.ipynb` - MCP agent testing
+
+## Notes
+* The previous Twisted-based implementation is preserved in the `twisted-legacy` branch for reference.

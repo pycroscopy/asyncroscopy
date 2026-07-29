@@ -322,7 +322,16 @@ class DigitalTwinDiffraction(DigitalTwin):
         max_val = float(result.max())
         return result / max_val if max_val > 0.0 else result
 
-    def _acquire_camera_image(self, imsize: int, exposure_time: float, detector: str, readout_area: str) -> str:
+    def _acquire_camera_image(
+        self,
+        imsize: int,
+        exposure_time: float,
+        detector: str,
+        readout_area: str,
+        frame_combining: int = 1,
+        electron_counting: bool = True,
+        output_format: str = '.h5',
+    ) -> str:
         particle, rattle_value = self._beam_particle()
         image_size = int(imsize or self.diffraction_image_size)
         diffraction = self._vacuum_diffraction(image_size) if particle is None else self._simulate_abtem_diffraction(particle, rattle_value, image_size)
@@ -334,6 +343,10 @@ class DigitalTwinDiffraction(DigitalTwin):
             'rattle_value': float(rattle_value),
             'beam_position_x': float(self._beam_pos_x),
             'beam_position_y': float(self._beam_pos_y),
+            'exposure_time': float(exposure_time),
+            'readout_area': str(readout_area),
+            'frame_combining': int(frame_combining),
+            'electron_counting': bool(electron_counting),
         }
         if particle is not None:
             attrs.update(
@@ -348,7 +361,16 @@ class DigitalTwinDiffraction(DigitalTwin):
                     'particle_zone_axis': '<100>',
                 }
             )
-        return save_acquisition(self, data_server, 'diffraction', str(detector), diffraction, dataset_name='image', dataset_attrs=attrs)
+        return save_acquisition(
+            self,
+            data_server,
+            'diffraction',
+            str(detector),
+            diffraction,
+            dataset_name='image',
+            dataset_attrs=attrs,
+            output_format=output_format,
+        )
 
     def _acquire_scanned_image(
         self,

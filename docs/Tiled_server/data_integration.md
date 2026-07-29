@@ -9,8 +9,9 @@ is the Tango data device for registering those files with the Tiled HTTP server.
 The default format is one HDF5 file per acquisition event: each correlated
 output is a dataset, with parsed AutoScript XML leaf metadata as HDF5 attributes.
 Image acquisitions can instead write `.tiff` (Velox-compatible, one file per
-detector) via `scan.output_format = ".tiff"`; spectra and STEM data are always
-HDF5.
+detector) via `scan.output_format = ".tiff"` for scanned images or
+`camera.output_format = ".tiff"` for camera images; spectra and STEM data are
+always HDF5.
 
 Vendors return two shapes and `save_acquisition` absorbs both: AutoScript adorned
 images bundle pixels and metadata, while PyJEM (JEOL) returns raw pixels plus a
@@ -19,14 +20,13 @@ HDF5 attributes for `.h5`; for `.tiff`, adorned images save it natively while
 raw-array vendors get the dict json-encoded into the TIFF `ImageDescription` tag.
 
 Acquisition commands that feed this pipeline include `acquire_scanned_image`,
-`acquire_spectrum`, `acquire_camera_image`, `acquire_flucam_image`, and
-`acquire_scanned_data_advanced`.
+`acquire_spectrum`, `acquire_camera_image`, and `acquire_scanned_data_advanced`.
 
 What a command returns — and how you read it back — depends on the format:
 
 - **`.h5`** (default): returns one Tiled key, read nested.
   `client[key]["image"]["HAADF"]` (one sub-dataset per detector), `["spectrum"]`,
-  or `["stem_data"]`; single camera / flucam frames use `image`.
+  or `["stem_data"]`; single camera frames use `image`.
 - **`.tiff`**: returns a shared *stem*. Rebuild one key per detector as
   `client[f"{stem}_{DET}.tiff"]`; `.read()` returns the array directly (no nesting).
 
@@ -58,6 +58,13 @@ Acquire as usual. With the default `.h5` the return value is the Tiled key; with
 ```python
 key = mic.acquire_scanned_image(["HAADF", "BF-S"])   # .h5  → client[key]["image"]["HAADF"]
 # scan.output_format = ".tiff"                        # .tiff → client[f"{key}_HAADF.tiff"].read()
+
+camera_key = mic.acquire_camera_image()               # .h5  → client[camera_key]["image"]
+# camera.output_format = ".tiff"                      # .tiff → client[f"{stem}_BM-Ceta.tiff"].read()
+
+# Select Flucam through the same CAMERA device and acquisition command:
+# camera.camera_detector = "Flucam"
+# flucam_key = mic.acquire_camera_image()
 ```
 
 ## Server Roles
