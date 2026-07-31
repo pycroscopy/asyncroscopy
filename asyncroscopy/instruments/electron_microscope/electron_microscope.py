@@ -203,12 +203,12 @@ class ElectronMicroscope(Instrument):
 
     @command(dtype_in=DevFloat)
     def set_fov(self, fov):
-        """Set the field of view for the next acquisition."""
+        """Set the field of view for the next acquisition, in meters."""
         self._set_fov(fov)
 
     @command(dtype_out=DevFloat)
     def get_fov(self):
-        """Read the field of view for the next acquisition."""
+        """Read the field of view for the next acquisition, in meters."""
         return self._get_fov()
     
     @command(dtype_in=DevVarFloatArray)

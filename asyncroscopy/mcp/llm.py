@@ -128,7 +128,13 @@ class LLM(Device):
                 }
             }
         )
-        tools = await client.get_tools()
+
+        try:
+            tools = await client.get_tools()
+        except Exception as e:
+            print(f"\n[CRITICAL ERROR]: Failed to retrieve tools: {e}")
+            raise
+
         tools_string = "\n".join([f"- Name: {t.name}\n  Description: {t.description}" for t in tools])
 
         agent_context = f"""You are an AI Agent with access to these tools:
