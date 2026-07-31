@@ -67,7 +67,7 @@ class DeviceConfig:
 
     @property
     def command(self) -> list[str]:
-        return ["uv", "run", "python", "-m", self.module_name, self.instance_name]
+        return ["uv", "run", "python", "-u", "-m", self.module_name, self.instance_name]
 
     @property
     def instance_name(self) -> str:
@@ -690,7 +690,18 @@ def main(argv: list[str] | None = None) -> int:
         print(color(f"Startup failed: {exc}", Style.bold + Style.red))
         if log_dir is not None:
             print(color(f"Per-server logs in {log_dir}:", Style.bold + Style.yellow))
-        
+
+        if 'manager' in locals() and manager.history:
+            print_debug_output(manager.history)
+            
+            if log_dir is not None:
+                for p in manager.history:
+                    stdout = buffered_output(p.stdout_lines)
+                    stderr = buffered_output(p.stderr_lines)
+                    log_file = log_dir / f"{p.key}.log"
+                    log_file.write_text(f"STDOUT:\n{stdout}\n\nSTDERR:\n{stderr}", encoding="utf-8")
+                print(color(f"Saved logs to {log_dir}", Style.bold + Style.yellow))
+
         # Stop tiled on a crash
         try:
             stop_tiled_server() 

@@ -52,7 +52,9 @@ class ProcessManager:
         self.state_dir = Path(state_dir)
         self.state_file = self.state_dir / f"{self.name}.json"
         self.graceful_timeout = graceful_timeout
+
         self.active_processes: list[ManagedProcess] = []
+        self.history: list[ManagedProcess] = []
 
     def __enter__(self):
         self._cleanup_stale_state()
@@ -86,9 +88,9 @@ class ProcessManager:
         proc = subprocess.Popen(command, **popen_kwargs)
         managed = ManagedProcess(key=key, label=label, process=proc, command=command)
         self.active_processes.append(managed)
+        self.history.append(managed) 
         self._drain(proc.stdout, managed.stdout_lines)
         self._drain(proc.stderr, managed.stderr_lines)
-        self.save()
         return managed
 
     @staticmethod
