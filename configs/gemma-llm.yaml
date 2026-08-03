@@ -1,7 +1,7 @@
 # Gemma4 31B local model startup config for LLM Tango device.
 
 tango:
-  host: 10.46.217.241
+  host: localhost
   port: 9094
 
 mcp_url: "http://127.0.0.1:8001/mcp"

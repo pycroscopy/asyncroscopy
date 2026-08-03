@@ -8,7 +8,7 @@
 # machine/IP. Set mcp.http_host to 0.0.0.0 when other machines need to connect.
 
 tango:
-  host: 10.46.217.241
+  host: localhost
   port: 9094
 
 mcp:

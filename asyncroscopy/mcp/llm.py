@@ -1,7 +1,6 @@
-"""Tango device wrapping an Ollama LangChain AI agent that connects to an MCP server."""
+"""Tango device wrapping an Ollama/LangChain AI agent that connects to an MCP server."""
 
 import asyncio
-import json
 import signal
 import sys
 import time
@@ -13,17 +12,26 @@ import tango
 from tango.server import Device, attribute, command, device_property
 
 try:
+    from langchain.chat_models import init_chat_model
     from langchain_ollama import ChatOllama
+    from langchain_core.messages import HumanMessage, ToolMessage
     from langchain_mcp_adapters.client import MultiServerMCPClient
 except ImportError:
     print("Missing dependencies! Please run:")
-    print("uv pip install langchain-ollama langchain-mcp-adapters")
+    print("uv pip install langchain langchain-core langchain-ollama langchain-mcp-adapters")
     sys.exit(1)
 
 
 class LLM(Device):
     mcp_url = device_property(dtype=str, default_value="http://127.0.0.1:8000/mcp")
+    
+    # Standard Ollama setup
     ollama_model = device_property(dtype=str, default_value="gemma4:31b")
+    
+    # Options for dynamic model initialization via `init_chat_model`
+    use_init_chat_model = device_property(dtype=bool, default_value=False)
+    model_provider = device_property(dtype=str, default_value="ollama")
+
     max_steps = attribute(label="Max Steps", dtype=int, access=tango.AttrWriteType.READ_WRITE)
 
     def init_device(self) -> None:
@@ -39,20 +47,33 @@ class LLM(Device):
         asyncio.set_event_loop(self._loop)
 
         try:
-            self.ensure_ollama_running()
-            self._model = ChatOllama(
-                model=self.ollama_model,
-                streaming=True,
-                reasoning=False,
-            )
+            if not self.use_init_chat_model or self.model_provider == "ollama":
+                self.ensure_ollama_running()
+
+            # Instantiate model
+            if self.use_init_chat_model:
+                self.info_stream(f"Initializing via init_chat_model (Provider: {self.model_provider})")
+                self._model = init_chat_model(
+                    model=self.ollama_model,
+                    model_provider=self.model_provider,
+                    temperature=0
+                )
+            else:
+                self.info_stream(f"Initializing via ChatOllama")
+                self._model = ChatOllama(
+                    model=self.ollama_model,
+                    temperature=0,
+                    reasoning=False
+                )
             
             # Pre-warm the model into GPU VRAM before setting state to ON
-            print("\n[SYSTEM]: Pre-warming Ollama model into VRAM (Cold Start)...")
+            print("\n[SYSTEM]: Pre-warming model into VRAM (Cold Start)...")
             sys.stdout.flush()
             start_warmup = time.time()
-            self._loop.run_until_complete(self._model.ainvoke(" "))
-            print(f"[SYSTEM]: Model pre-warmed in {time.time() - start_warmup:.2f}s! Device ready.")
             
+            self._loop.run_until_complete(self._model.ainvoke([HumanMessage(content=" ")]))
+            
+            print(f"[SYSTEM]: Model pre-warmed in {time.time() - start_warmup:.2f}s! Device ready.")
             self.set_state(tango.DevState.ON)
             self.info_stream(f"LLM initialized with model: {self.ollama_model}")
             
@@ -135,19 +156,11 @@ class LLM(Device):
             print(f"\n[CRITICAL ERROR]: Failed to retrieve tools: {e}")
             raise
 
-        tools_string = "\n".join([f"- Name: {t.name}\n  Description: {t.description}" for t in tools])
-
-        agent_context = f"""You are an AI Agent with access to these tools:
-        {tools_string}
-
-        To use a tool, respond exactly like this:
-        Action: <tool_name>
-        Arguments: <JSON_object_or_string>
-
-        When you have the final answer, respond exactly like this:
-        Final Answer: <your_response>
-
-        User Request: {prompt}"""
+        # Bind native tools to the model
+        llm_with_tools = self._model.bind_tools(tools)
+        
+        # Initialize conversation history with the prompt
+        messages = [HumanMessage(content=prompt)]
 
         print(f"\n{'='*50}\n[NEW REQUEST]: {prompt}\n{'='*50}")
 
@@ -156,60 +169,63 @@ class LLM(Device):
             print("[WAITING FOR MODEL...]: ", end="")
             sys.stdout.flush()
             
-            response = ""
             start_time = time.time()
             first_token_received = False
+            ai_message = None
             
-            async for chunk in self._model.astream(agent_context):
+            # Stream the model response
+            async for chunk in llm_with_tools.astream(messages):
                 if not first_token_received:
                     ttft = time.time() - start_time
                     print(f"\n[DIAGNOSTIC]: Time to first token: {ttft:.2f} seconds.")
                     print("[GENERATION]: ", end="")
                     first_token_received = True
 
-                chunk_text = chunk.content if hasattr(chunk, 'content') else str(chunk)
-                response += chunk_text
-                print(chunk_text, end="")
-                sys.stdout.flush() 
+                # Print text as it streams
+                if chunk.content:
+                    print(chunk.content, end="")
+                    sys.stdout.flush() 
+                
+                if ai_message is None:
+                    ai_message = chunk
+                else:
+                    ai_message += chunk
                 
             print("\n") 
-            response = response.strip()
 
-            if "Action:" in response and "Arguments:" in response:
-                try:
-                    tool_name = response.split("Action:")[1].split("\n")[0].strip()
-                    tool_args_raw = response.split("Arguments:")[1].split("\n")[0].strip()
-                    
-                    try:
-                        tool_args = json.loads(tool_args_raw)
-                    except json.JSONDecodeError:
-                        tool_args = tool_args_raw
-
-                    active_tool = next((t for t in tools if t.name == tool_name), None)
-                    
-                    if active_tool:
-                        print(f"[EXECUTING TOOL]: {tool_name}({tool_args})")
-                        observation = await active_tool.ainvoke(tool_args)
-                        print(f"[TOOL RESULT]: {observation}")
-                        
-                        agent_context += f"\n{response}\nObservation: {observation}"
-                    else:
-                        err = f"Model tried to call unknown tool '{tool_name}'"
-                        print(f"[ERROR]: {err}")
-                        agent_context += f"\n{response}\nObservation: {err}"
-                        
-                except Exception as e:
-                    err = f"Parsing error: {e}"
-                    print(f"[ERROR]: {err}")
-                    agent_context += f"\n{response}\nObservation: {err}"
-                    
-            elif "Final Answer:" in response:
-                final_ans = response.split("Final Answer:", 1)[1].strip()
+            # Check if tools need to be called
+            if not ai_message.tool_calls:
+                final_ans = ai_message.content.strip()
                 print(f"[FINAL ANSWER RETURNED]:\n{final_ans}\n{'='*50}")
                 return final_ans
-            else:
-                print("[WARNING]: Model replied with standard text, bypassing final answer format.")
-                return response
+
+            messages.append(ai_message)
+
+            # Execute tool calls
+            for tool_call in ai_message.tool_calls:
+                tool_name = tool_call["name"]
+                tool_args = tool_call["args"]
+                tool_id = tool_call["id"]
+                
+                print(f"[EXECUTING TOOL]: {tool_name}({tool_args})")
+                active_tool = next((t for t in tools if t.name == tool_name), None)
+                
+                if active_tool:
+                    try:
+                        observation = await active_tool.ainvoke(tool_args)
+                        obs_str = str(observation)
+                    except Exception as e:
+                        obs_str = f"Error executing tool: {e}"
+                else:
+                    obs_str = f"Model tried to call unknown tool '{tool_name}'"
+                
+                print(f"[TOOL RESULT]: {obs_str}")
+                
+                messages.append(ToolMessage(
+                    name=tool_name,
+                    content=obs_str,
+                    tool_call_id=tool_id
+                ))
                 
         return "Max steps reached without a final answer."
 
