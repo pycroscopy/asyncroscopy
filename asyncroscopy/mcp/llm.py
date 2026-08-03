@@ -21,6 +21,7 @@ class LLM(Device):
     model_name = device_property(dtype=str, default_value="gpt-4o")
     api_key = device_property(dtype=str, default_value="")
     local_model_path = device_property(dtype=str, default_value=None)
+    max_steps = device_property(dtype=int, default_value=5)
 
     def init_device(self) -> None:
         """Initialize the Tango device."""
@@ -82,7 +83,7 @@ class LLM(Device):
                     "text-generation",
                     model=hf_model,
                     tokenizer=tokenizer,
-                    max_new_tokens=256,
+                    max_new_tokens=512,
                     temperature=0.2,
                     return_full_text=False,
                 )
@@ -128,11 +129,12 @@ class LLM(Device):
 
         User Request: {prompt}"""
 
-        for step in range(5):
+        for step in range(self.max_steps):
             if self.local_model_path is not None:
-                raw_response = self._model.invoke(agent_context).content
+                response_msg = self._model.invoke(agent_context)
             else:
-                raw_response = await self._model.ainvoke(agent_context)
+                response_msg = await self._model.ainvoke(agent_context)
+            raw_response = response_msg.content if hasattr(response_msg, 'content') else str(response_msg)
             response = raw_response.replace("<turn|>", "").strip()
             
             # Check if the model wants to call a tool
@@ -170,7 +172,11 @@ class LLM(Device):
             else:
                 self.info_stream("\nModel responded with plain text instead of using a tool format.")
                 return response
-        return "Error: Agent reached maximum steps without providing a final answer."
+        return response
 
-    if __name__ == "__main__":
-        LLM.run_server()
+# ----------------------------------------------------------------------
+# Server entry point
+# ----------------------------------------------------------------------
+
+if __name__ == "__main__":
+    LLM.run_server()

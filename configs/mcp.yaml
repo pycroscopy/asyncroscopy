@@ -21,6 +21,7 @@ mcp:
   blocked_classes:
     - DataBase
     - DServer
+    - LLM
   blocked_functions:
     "*":
       - Init
