@@ -4,7 +4,7 @@ from tkinter import ttk, messagebox
 from gevent import os
 import numpy as np
 import tango
-from autoscript_tem_microscope_client import TemMicroscopeClient
+# from autoscript_tem_microscope_client import TemMicroscopeClient
 
 
 
@@ -26,13 +26,13 @@ class AdvancedMicroscopeGUI:
         # --- Internal Coordinate States ---
         self.stage_x, self.stage_y, self.stage_z = 0.0, 0.0, 0.0
         self.stage_alpha, self.stage_beta = 0.0, 0.0
-        self.beam_x, self.beam_y, self.df = 0.0, 0.0, 0.0
+        self.beam_x, self.beam_y, self.defocus = 0.0, 0.0, 0.0
         self.beam_alpha, self.beam_beta = 0.0, 0.0
 
         # --- StringVars for UI Inputs ---
         self.x_var, self.y_var, self.z_var = tk.StringVar(value="0.00"), tk.StringVar(value="0.00"), tk.StringVar(value=f"{0.00:.2f}")
         self.alpha_var, self.beta_var = tk.StringVar(value="0.00"), tk.StringVar(value="0.00")
-        self.bsx_var, self.bsy_var, self.df_var = tk.StringVar(value="0.00"), tk.StringVar(value="0.00"), tk.StringVar(value=f"{0.00:.2f}")
+        self.bsx_var, self.bsy_var, self.defocus_var = tk.StringVar(value="0.00"), tk.StringVar(value="0.00"), tk.StringVar(value=f"{0.00:.2f}")
         self.btx_var, self.bty_var = tk.StringVar(value="0.00"), tk.StringVar(value="0.00")
 
         # Custom Styling
@@ -56,7 +56,7 @@ class AdvancedMicroscopeGUI:
         # Row 1: Electronic Beam Coordinates
         self.create_grid_field(self.readout_frame, "Beam S-X:", self.bsx_var, "nm", 1, 0)
         self.create_grid_field(self.readout_frame, "Beam S-Y:", self.bsy_var, "nm", 1, 3)
-        self.create_grid_field(self.readout_frame, "Defocus Δf:", self.df_var, "nm", 1, 6)
+        self.create_grid_field(self.readout_frame, "Defocus Δf:", self.defocus_var, "nm", 1, 6)
         self.create_grid_field(self.readout_frame, "Beam T-X:", self.btx_var, "mrad", 1, 9)
         self.create_grid_field(self.readout_frame, "Beam T-Y:", self.bty_var, "mrad", 1, 12)
 
@@ -142,8 +142,18 @@ class AdvancedMicroscopeGUI:
         self.position_dropdown.grid(row=1, column=1, padx=2)
         tk.Button(self.step_frame, text='Go To', bg="#222222", fg="#ffffff", command=self.go_to_position).grid(row=1, column=2, padx=2)
 
+        tk.Button(self.step_frame, text='autoFocus', bg="#222222", fg="#ffffff", command=self.auto_focus).grid(row=1, column=3, padx=2)
+
         self.current_conditions()
         self.sync_ui_to_vars()
+
+    def auto_focus(self):
+        # Placeholder for autofocus functionality
+        if 'auto_focus' in self.microscope.get_command_list():
+            self.microscope.auto_focus()
+        else:
+            messagebox.showinfo("Auto Focus", "Auto-focus functionality is not implemented yet.")
+
     def save_position(self):
         from tkinter import simpledialog
         positions = self.microscope.get_stage()
@@ -151,14 +161,15 @@ class AdvancedMicroscopeGUI:
         self.saved_stage_positions.setdefault(name, positions)
         self.position_dropdown.config(values=list(self.saved_stage_positions.keys()))
         self.position_dropdown.set(name)
+
     def go_to_position(self):
         name = self.position_dropdown.get()
         if name in self.saved_stage_positions:
             positions = self.saved_stage_positions[name]
             self.stage_x, self.stage_y, self.stage_z = np.array([positions[:3]])*1e9    
-            self.stage_alpha = np.degrees(positions[3])
+            self.stage_alpha = positions[3]
             if len(positions) > 4:
-                self.stage_beta = np.degrees(positions[4])
+                self.stage_beta = positions[4]
             self.sync_ui_to_vars()
 
     def current_conditions(self):
@@ -166,15 +177,18 @@ class AdvancedMicroscopeGUI:
         self.stage_x = starting_stage_position[0]*1e9
         self.stage_y = starting_stage_position[1]*1e9
         self.stage_z = starting_stage_position[2]*1e9
-        self.stage_alpha = np.degrees(starting_stage_position[3])
+        self.stage_alpha = starting_stage_position[3]
         self.stage_beta = 0
-        if len(starting_stage_position)<4 :
+        if len(starting_stage_position) > 4 :
             if starting_stage_position[4] is not None:
-                self.stage_beta = np.degrees(starting_stage_position[4])
+                self.stage_beta = starting_stage_position[4]
         self.beam_x, self.beam_y = self.microscope.get_image_shift()
-        self.df = self.microscope.get_defocus()
+        self.beam_x *=1e9
+        self.beam_y *=1e9
+        self.defocus = self.microscope.get_defocus() * 1e9
         self.beam_alpha, self.beam_beta =  self.microscope.get_beam_tilt()
-    
+        self.beam_alpha *= 1e3
+        self.beam_beta *= 1e3
 
     # --- UI Helpers ---
     def create_grid_field(self, parent, text, var, unit, r, c):
@@ -198,11 +212,11 @@ class AdvancedMicroscopeGUI:
     def set_stage(self):
         """Move the mechanical stage to the target coordinates."""
         self.microscope.move_stage([self.stage_x*1e-9, self.stage_y*1e-9, self.stage_z*1e-9, 
-                                                      np.radians(self.stage_alpha), np.radians(self.stage_beta)])
+                                                      self.stage_alpha, self.stage_beta])
 
     def set_defocus(self):
         """Set the defocus value."""
-        self.microscope.set_defocus(self.df * 1e-9)  # Convert nm to meters
+        self.microscope.set_defocus(self.defocus * 1e-9)  # Convert nm to meters
     
     def set_beam_shift(self):
         """Set the beam shift values."""
@@ -231,7 +245,7 @@ class AdvancedMicroscopeGUI:
             move_stage = True
         if move_stage:
             self.set_stage()
-        if self.df_var != f"{self.df:.2f}":
+        if self.defocus_var != f"{self.defocus:.2f}":
             self.set_defocus()
         if self.bsx_var != f"{self.beam_x:.2f}"or self.bsy_var != f"{self.beam_y:.2f}":
             self.set_beam_shift()
@@ -245,13 +259,13 @@ class AdvancedMicroscopeGUI:
         self.beta_var.set(f"{self.stage_beta:.2f}")
         self.bsx_var.set(f"{self.beam_x:.2f}"); 
         self.bsy_var.set(f"{self.beam_y:.2f}"); 
-        self.df_var.set(f"{self.df:.2f}")
+        self.defocus_var.set(f"{self.defocus:.2f}")
         self.btx_var.set(f"{self.beam_alpha:.2f}"); 
         self.bty_var.set(f"{self.beam_beta:.2f}")
     def fetch_vars_from_ui(self):
         self.stage_x, self.stage_y, self.stage_z = float(self.x_var.get()), float(self.y_var.get()), float(self.z_var.get())
         self.stage_alpha, self.stage_beta = float(self.alpha_var.get()), float(self.beta_var.get())
-        self.beam_x, self.beam_y, self.df = float(self.bsx_var.get()), float(self.bsy_var.get()), float(self.df_var.get())
+        self.beam_x, self.beam_y, self.defocus = float(self.bsx_var.get()), float(self.bsy_var.get()), float(self.defocus_var.get())
         self.beam_alpha, self.beam_beta = float(self.btx_var.get()), float(self.bty_var.get())
     def jog_engine(self, mx=0, my=0, mz=0, ma=0, mb=0, mbsx=0, mbsy=0, mdf=0, mbtx=0, mbty=0):
         try:
@@ -266,7 +280,7 @@ class AdvancedMicroscopeGUI:
             self.stage_beta += (mb * step_stg_ang)
             self.beam_x += (mbsx * step_bm_sft)
             self.beam_y += (mbsy * step_bm_sft)
-            self.df += (mdf * step_bm_sft)
+            self.defocus += (mdf * step_bm_sft)
             self.beam_alpha += (mbtx * step_bm_tlt)
             self.beam_beta += (mbty * step_bm_tlt)
             self.sync_ui_to_vars()
@@ -295,11 +309,11 @@ class AdvancedMicroscopeGUI:
         self.beam_alpha, self.beam_beta = 0.0, 0.0
         self.sync_ui_to_vars()
     def reset_defocus(self):
-        self.df = 0.0
+        self.defocus = 0.0
         self.sync_ui_to_vars()
     def reset_all(self):
         self.stage_x, self.stage_y, self.stage_z, self.stage_alpha, self.stage_beta = 0.0, 0.0, 0.0, 0.0, 0.0
-        self.beam_x, self.beam_y, self.df, self.beam_alpha, self.beam_beta = 0.0, 0.0, 0.0, 0.0, 0.0
+        self.beam_x, self.beam_y, self.defocus, self.beam_alpha, self.beam_beta = 0.0, 0.0, 0.0, 0.0, 0.0
         self.sync_ui_to_vars()
     
 

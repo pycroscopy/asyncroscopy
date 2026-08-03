@@ -3,14 +3,14 @@
 import argparse
 import base64
 import inspect
+import re
 import json
 import traceback
-from pathlib import Path
 from typing import Annotated, Any, Callable
 
-import h5py
 import numpy as np
 from pydantic import Field
+from tiled.client import from_uri
 
 from tango import Database, DeviceProxy, CommandInfo, CmdArgType
 from tango.utils import (
@@ -99,51 +99,67 @@ class MCPServer:
         max_values: int = 64,
         data_device_address: str | None = None,
     ) -> dict[str, Any]:
-        """Read a DATA/Tiled HDF5 acquisition key and return dataset metadata plus small previews."""
+        """Read a remote DATA/Tiled key and return dataset metadata plus small previews."""
         address = data_device_address or self.data_device_address
         data = DeviceProxy(address)
         config = json.loads(data.get_config())
+        uri = config.get("uri")
+        if not uri:
+            raise RuntimeError(f"DATA device {address!r} did not provide a Tiled URI")
 
-        path = None
-        for root in (config.get("save_path"), config.get("tiled_server_serving")):
-            if not root:
-                continue
-            candidate = Path(root).expanduser() / key
-            if candidate.exists():
-                path = candidate
-                break
+        client = from_uri(uri)
+        try:
+            node = client[key]
+        except KeyError as exc:
+            raise FileNotFoundError(
+                f"Could not resolve data key {key!r} from Tiled server {uri!r}"
+            ) from exc
 
-        if path is None:
-            raise FileNotFoundError(f"Could not resolve data key {key!r} from DATA device {address!r}")
-
+        limit = max(0, int(max_values))
+        suffix = key.rsplit(".", 1)[-1].lower() if "." in key else "unknown"
         result: dict[str, Any] = {
             "key": key,
-            "path": str(path),
-            "size_bytes": path.stat().st_size,
+            "uri": uri,
+            "format": "hdf5" if suffix in {"h5", "hdf5"} else suffix,
+            "attrs": self._numpy_to_python(dict(getattr(node, "metadata", {}) or {})),
         }
-        if path.suffix.lower() not in {".h5", ".hdf5"}:
-            result["format"] = path.suffix.lower().lstrip(".") or "unknown"
-            return result
-
-        result["format"] = "hdf5"
         datasets: list[dict[str, Any]] = []
-        with h5py.File(path, "r") as h5:
-            result["attrs"] = self._hdf5_attrs_to_json(h5.attrs)
 
-            def visit(name: str, obj: Any) -> None:
-                if not isinstance(obj, h5py.Dataset):
-                    return
+        def visit(current: Any, name: str = "") -> None:
+            read = getattr(current, "read", None)
+            if callable(read):
+                shape = tuple(getattr(current, "shape", ()) or ())
+                if limit == 0:
+                    array = np.asarray([], dtype=getattr(current, "dtype", float))
+                elif shape:
+                    remaining = limit
+                    slices = []
+                    for size in reversed(shape):
+                        take = min(int(size), max(1, remaining))
+                        slices.append(slice(0, take))
+                        remaining = (remaining + take - 1) // take
+                    array = np.asarray(read(tuple(reversed(slices))))
+                else:
+                    array = np.asarray(read())
                 item: dict[str, Any] = {
                     "name": name,
-                    "shape": list(obj.shape),
-                    "dtype": str(obj.dtype),
-                    "attrs": self._hdf5_attrs_to_json(obj.attrs),
+                    "shape": list(shape or array.shape),
+                    "dtype": str(getattr(current, "dtype", array.dtype)),
+                    "attrs": self._numpy_to_python(
+                        dict(getattr(current, "metadata", {}) or {})
+                    ),
+                    "preview": self._numpy_to_python(array.reshape(-1)[:limit]),
                 }
-                preview = np.asarray(obj[()]).reshape(-1)[: max(0, int(max_values))]
-                item["preview"] = self._numpy_to_python(preview)
                 datasets.append(item)
+                return
 
-            h5.visititems(visit)
+            keys = getattr(current, "keys", None)
+            if callable(keys):
+                for child_name in keys():
+                    child_path = f"{name}/{child_name}" if name else str(child_name)
+                    visit(current[child_name], child_path)
+
+        visit(node)
         result["datasets"] = datasets
         return result
 
@@ -260,6 +276,7 @@ class MCPServer:
         Returns:
             A wrapper function with a proper signature
         """
+
         in_type = cmd_info.in_type
         py_type = self._tango_type_to_python(in_type)
         in_desc = cmd_info.in_type_desc
@@ -278,33 +295,59 @@ class MCPServer:
             doc_lines.append(f"Output Description: {cmd_info.out_type_desc}")
         doc = "\n".join(doc_lines)
 
+        # Get parameter name from docstring description text
+        param_name = "arg"
+        if in_desc:
+            match = re.search(r'(?::param|@param)\s+(\w+):', in_desc)
+            if match:
+                param_name = match.group(1)
+                print(param_name)
+
         if in_desc and in_desc.lower() not in (
             "uninitialised",
             "none",
             "",
             "uninitialized",
         ):
-            # Sanitize description - remove newlines to prevent JSON schema breakage
+            # Sanitize description
             clean_desc = in_desc.replace("\n", " ").strip()
             arg_type = Annotated[py_type, Field(description=clean_desc)]
         else:
             arg_type = py_type
 
         if in_type == CmdArgType.DevVoid:
-
             def wrapper():
                 result = func()
                 return self._normalize_command_result(out_type, result)
 
             params = []
+            
+        elif py_type is dict:
+            # For commands taking a dictionary (like DevEncoded), allow arbitrary keyword arguments.
+            def wrapper(**kwargs):
+                if "arg" in kwargs and len(kwargs) == 1 and isinstance(kwargs["arg"], dict):
+                    arg_input = kwargs["arg"]
+                else:
+                    arg_input = kwargs
+                
+                result = func(arg_input)
+                return self._normalize_command_result(out_type, result)
+
+            # Use VAR_KEYWORD (**kwargs) to make Pydantic accept any incoming fields
+            params = [inspect.Parameter("kwargs", inspect.Parameter.VAR_KEYWORD)]
+            
         else:
-            def wrapper(arg):
+            # Scalars and standard arrays
+            def wrapper(*args, **kwargs):
+                # Get first positional arg or parameter name out of kwargs
+                arg = args[0] if args else kwargs.get(param_name)
                 result = func(arg)
                 return self._normalize_command_result(out_type, result)
 
-            params = [inspect.Parameter("arg", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=arg_type)]
+            params = [inspect.Parameter(param_name, inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=arg_type)]
 
-        wrapper.__annotations__ = {p.name: p.annotation for p in params}
+        # Build annotations, omitting VAR_KEYWORD parameters so Pydantic safely allows dynamic extra fields
+        wrapper.__annotations__ = {p.name: p.annotation for p in params if p.kind != inspect.Parameter.VAR_KEYWORD}
         wrapper.__annotations__["return"] = py_return_type
 
         wrapper.__signature__ = inspect.Signature(parameters=params, return_annotation=py_return_type)
@@ -346,7 +389,7 @@ class MCPServer:
                 continue
 
             for cmd in commands:
-                command_name = cmd.cmd_name if hasattr(cmd, "cmd_name") else str(cmd)
+                command_name = cmd.cmd_name
                 global_blocks = self.blocked_functions.get("*", [])
                 if command_name in global_blocks or f"{dev_class}.{command_name}" in global_blocks or command_name in self.blocked_functions.get(dev_class, []):
                     continue

@@ -46,6 +46,10 @@ If you're editing this class, you're usually doing one of these:
      *not* declared on the base — it's defined only in the vendor subclass.
      If you add a new vendor, you must provide `_acquire_spectrum` yourself.
 
+   Stage positions use `[x, y, z, alpha, beta]`; x/y/z are meters and alpha/beta
+   are degrees in the public Tango API. Vendor helpers should convert only at
+   the hardware boundary if the vendor API expects another unit.
+
 5. **Changing the return / transport convention**
    Acquisition commands return a Tiled key string; the actual save happens in
    the vendor helper via `save_acquisition` (`asyncroscopy/data/data_writer.py`)

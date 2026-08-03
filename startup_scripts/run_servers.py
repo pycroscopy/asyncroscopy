@@ -59,6 +59,7 @@ class DeviceConfig:
     key: str
     class_name: str
     module_name: str
+    properties: dict[str, list[str]] = field(default_factory=dict)
     start_after_dependencies: bool = False
 
     @property
@@ -183,6 +184,10 @@ def load_config(path: Path) -> Config:
             key=key,
             class_name=(spec or {}).get("class_name", key.upper()),
             module_name=_require(spec or {}, "module_name", f"devices.{key}"),
+            properties={
+                property_name: [str(property_value)]
+                for property_name, property_value in ((spec or {}).get("properties") or {}).items()
+            },
         )
         for key, spec in _require(raw, "devices", "(top level)").items()
     ]
@@ -595,6 +600,9 @@ def register_devices(devices: list[DeviceConfig], instrument_properties: dict[st
         device_info.name = device.device_name
         database.add_device(device_info)
         status_line("OK", device.device_name)
+        for property_name, property_value in device.properties.items():
+            database.put_device_property(device.device_name, {property_name: property_value})
+            status_line("OK", f"property: {device.device_name} {property_name} = {property_value[0]}")
 
     instrument = selected_instrument(devices)
     for property_name, property_value in instrument_properties.items():

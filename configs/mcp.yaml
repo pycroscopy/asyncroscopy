@@ -8,19 +8,20 @@
 # machine/IP. Set mcp.http_host to 0.0.0.0 when other machines need to connect.
 
 tango:
-  host: localhost
+  host: 10.46.217.241
   port: 9094
 
 mcp:
   name: Spectra300_MCP
   transport: streamable-http
-  http_host: 127.0.0.1
+  http_host: 0.0.0.0
   http_port: 8000
   data_device_address: asyncroscopy/data/default
   quiet: true
   blocked_classes:
     - DataBase
     - DServer
+    - LLM
   blocked_functions:
     "*":
       - Init

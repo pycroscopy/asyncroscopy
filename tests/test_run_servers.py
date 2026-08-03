@@ -170,21 +170,29 @@ def test_delete_tango_database_files_removes_known_filenames(tmp_path, monkeypat
 
 def test_load_spectra300_config_starts_servers_only():
     config = run_servers.load_config(run_servers.PROJECT_DIR / "configs" / "Spectra300.yaml")
+    stage = next(device for device in config.support_devices if device.key == "stage")
 
     assert config.tango_host == "10.46.217.241"
     assert config.tiled.host == "10.46.217.241"
     assert config.tiled.register_on_startup is False
     assert config.instrument.class_name == "AutoScriptMicroscope"
     assert config.instrument.module_name == "asyncroscopy.instruments.electron_microscope.auto_script"
+    assert stage.class_name == "AutoScriptSTAGE"
+    assert stage.module_name == "asyncroscopy.instruments.electron_microscope.hardware.stage_autoscript"
+    assert stage.properties["hardware_host"] == ["10.46.217.241"]
+    assert stage.properties["hardware_port"] == ["9095"]
     assert config.reset_database_file is False
     assert not hasattr(config, "mcp")
 
 
 def test_build_devices_adds_selected_instrument():
-    config = run_servers.load_config(run_servers.PROJECT_DIR / "configs" / "DigitalTwin.yaml")
+    config = run_servers.load_config(run_servers.PROJECT_DIR / "configs" / "Test.yaml")
 
     devices = run_servers.build_devices(config)
+    stage = next(device for device in devices if device.key == "stage")
 
+    assert stage.class_name == "TestStage"
+    assert stage.module_name == "asyncroscopy.instruments.electron_microscope.hardware.TestStage"
     assert devices[-1].key == "instrument"
     assert devices[-1].class_name == "DigitalTwin"
     assert devices[-1].module_name == "asyncroscopy.instruments.electron_microscope.digital_twin"
@@ -195,11 +203,11 @@ def test_load_mcp_config():
     config = run_mcp.load_config(run_mcp.PROJECT_DIR / "configs" / "mcp.yaml")
 
     assert config.mcp.name == "Spectra300_MCP"
-    assert config.tango_host == "localhost"
+    assert config.tango_host == "10.46.217.241"
     assert config.tango_port == 9094
-    assert config.mcp.http_host == "127.0.0.1"
+    assert config.mcp.http_host == "0.0.0.0"
     assert config.mcp.http_port == 8000
-    assert config.mcp.blocked_classes == ["DataBase", "DServer"]
+    assert config.mcp.blocked_classes == ["DataBase", "DServer", "LLM"]
     assert config.mcp.blocked_functions == {"*": ["Init", "Kill", "RestartServer"]}
 
 

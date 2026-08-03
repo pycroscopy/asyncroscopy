@@ -6,7 +6,7 @@ It provides realistic-enough image and spectrum behavior for development, testin
 ## How it works
 
 1. On startup, the twin generates a **persistent synthetic sample** (deterministic from seed).
-2. Stage pose (`x, y, z, alpha, beta`) defines the current viewport into that sample.
+2. Stage pose (`x, y, z, alpha, beta`) defines the current viewport into that sample. x/y/z are meters; alpha/beta are degrees.
 3. `acquire_scanned_image(["haadf"])` calls the inherited microscope command, which delegates to `_acquire_scanned_image()`.
 4. `_acquire_scanned_image()` renders the current pose/FoV, writes HDF5 data with metadata attributes, and returns the DATA/Tiled key when a DATA device is configured.
 5. `acquire_spectrum("eds")` delegates to `_acquire_spectrum()`, which estimates composition at the current beam position and saves a HDF5 spectrum.
@@ -48,7 +48,7 @@ uv sync --extra diffraction
 
 ## Key commands
 
-- `move_stage([x, y, z, alpha, beta])`
+- `move_stage([x, y, z, alpha, beta])` where x/y/z are meters and alpha/beta are degrees
 - `get_stage()`
 - `set_fov(fov)`
 - `set_defocus(defocus)`

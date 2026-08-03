@@ -16,7 +16,6 @@ Real AutoScript image commands save the adorned object on disk and return the
 DATA/Tiled unique id for that saved acquisition.
 """
 
-import math
 import time
 import json
 
@@ -32,6 +31,7 @@ from asyncroscopy.data.data_writer import DEFAULT_ACQUISITION_DIR, save_acquisit
 # Wrapped in try/except so the device can still be imported and tested
 # on a development machine without AutoScript installed.
 try:
+    import autoscript_tem_microscope_client
     from autoscript_tem_microscope_client import TemMicroscopeClient
     from autoscript_tem_microscope_client.enumerations import EdsDetectorType
     from autoscript_tem_microscope_client.enumerations import CameraType, RegionCoordinateSystem, ExposureTimeType
@@ -352,6 +352,14 @@ class AutoScriptMicroscope(ElectronMicroscope):
         """Get defocus in meters."""
         return float(self._microscope.optics.defocus)
     
+    def _set_screen(self, position: str)->None:
+        if position.lower() in ['in', 'insert', 'inserted']:
+            if self._microscope.detectors.screen.position == 'Retracted':
+                self._microscope.detectors.screen.insert()
+        elif position.lower() in ['out', 'retract', 'retracted']:
+             if self._microscope.detectors.screen.position == 'Inserted':
+                self._microscope.detectors.screen.retract()
+
 
     def _calibrate_screen_current(self) -> None:
         """ calibrate screen current with monchromator focus"""
@@ -422,7 +430,7 @@ class AutoScriptMicroscope(ElectronMicroscope):
             return position[:4]
         
     
-    def _get_status(self):
+    def _get_parameters(self):
         status = {'system': self._microscope.service.system.name,
                 'vacuum': self._microscope.vacuum.state,
                 'column_valves': self._microscope.vacuum.column_valves.state,
@@ -455,27 +463,25 @@ class AutoScriptMicroscope(ElectronMicroscope):
 
         return json.dumps(status)
 
+    def _get_stage(self):
+        """Get the current stage position as [x, y, z, alpha, beta], with tilts in degrees."""
+        # set proxy attributes with current stage position
+        stage = self._detector_proxies["stage"]
+        return stage.position
+
     def _move_stage(self, position) -> None:
-        """Move stage to specified position [x, y, z, alpha, beta]."""
-        # TODO: add beta value check
-
-        x = float(position[0])
-        y = float(position[1])
-        z = float(position[2])
-        alpha = float(math.radians(position[3]))
-
-        if len(position) > 4 and position[4] is not None:
-            beta = float(math.radians(position[4]))
-        else:
-            beta = None
-
-        self._microscope.specimen.stage.absolute_move((x, y, z, alpha, beta))
-        # self._get_stage()  # link the proxy with real state
+        """Move stage to [x, y, z, alpha, beta], with x/y/z in meters and tilts in degrees."""
+        stage_proxy = self._detector_proxies.get("stage")
+        stage_proxy.position = position  # expects [x, y, z, alpha, beta] in meters and degrees
 
     def _auto_focus(self):
         """Perform autofocus routine C1A1"""
-        settings = RunOptiStemSettings(method="C1A1")  # method=OptiStemMethod.C1_A1, dwell_time=2e-06, cutoff_in_pixels=5)
-        self._microscope.auto_functions.run_opti_stem(settings)
+        if self._microscope.optics.optical_mode == 'Stem':
+            settings = RunOptiStemSettings(method="C1A1")
+            self._microscope.auto_functions.run_opti_stem(settings)
+        else:
+            settings = autoscript_tem_microscope_client.structuresRunObjectiveAutoStigmatorSettings(camera_detector="Flucam")
+            self.microscope.auto_functions.run_objective_auto_stigmator(settings)
 
     def _set_image_shift(self, shift):
         """Apply image shift in meters."""

@@ -18,7 +18,12 @@ devices:
   eds: { module_name: asyncroscopy.instruments.electron_microscope.detectors.eds }
   flucam: { module_name: asyncroscopy.instruments.electron_microscope.detectors.flucam }
   scan: { module_name: asyncroscopy.instruments.electron_microscope.hardware.scan }
-  stage: { module_name: asyncroscopy.instruments.electron_microscope.hardware.stage }
+  stage:
+    class_name: AutoScriptSTAGE
+    module_name: asyncroscopy.instruments.electron_microscope.hardware.stage_autoscript
+    properties:
+      hardware_host: 10.10.11.52
+      hardware_port: 9095
 
 tango:
   host: localhost

@@ -53,6 +53,22 @@ diffraction = [
     "ase>=3.27.0",
 ]
 
+agent = [
+    "langchain",
+    "langchain-openai",
+    "langgraph",
+    "langchain-mcp-adapters",    
+]
+
+localagent = [
+    "accelerate",
+    "transformers",
+    "torch>=2.7.0",
+    "torchvision",
+    "bitsandbytes",
+    "langchain-huggingface",
+]
+
 [tool.setuptools]
 package-dir = { "" = "." }
 
@@ -65,3 +81,14 @@ autoscript-tem-microscope-client = { path = "stubs/AutoScript_v_1.17/autoscript_
 autoscript-tem-toolkit = { path = "stubs/AutoScript_v_1.17/autoscript_tem_toolkit-1.17.0-py3-none-any.whl" }
 thermoscientific-logging = { path = "stubs/AutoScript_v_1.17/thermoscientific_logging-1.3.0-py3-none-any.whl" }
 pyjem = { path = "stubs/PyJEM_v_1.3.0.3564/PyJEM-1.3.0.3564-py3-none-any.whl" }
+torch = [
+    { index = "pytorch-cu128", marker = "sys_platform == 'win32'" }
+]
+torchvision = [
+    { index = "pytorch-cu128", marker = "sys_platform == 'win32'" }
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true

@@ -19,7 +19,6 @@ import tango
 
 import asyncio
 
-import h5py
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -417,25 +416,40 @@ class TestMCPSerialization:
             "nested": {"values": [3, [[4, 5]]]},
         }
 
-    def test_get_data_from_key_reads_hdf5_preview(self, monkeypatch, tmp_path) -> None:
+    def test_get_data_from_key_reads_remote_tiled_preview(self, monkeypatch) -> None:
         monkeypatch.setattr("asyncroscopy.mcp.mcp_server.Database", lambda host, port: None)
 
-        path = tmp_path / "frame.h5"
-        with h5py.File(path, "w") as h5:
-            dset = h5.create_dataset("image/HAADF", data=np.arange(9).reshape(3, 3))
-            dset.attrs["detector"] = "HAADF"
+        class FakeArray:
+            metadata = {"detector": "HAADF"}
+            shape = (3, 3)
+            dtype = np.dtype("int64")
+
+            def read(self, slices=None):
+                array = np.arange(9).reshape(3, 3)
+                return array[slices] if slices else array
+
+        class FakeContainer(dict):
+            metadata = {"source": "microscope"}
+
+        tiled_node = FakeContainer(image=FakeContainer(HAADF=FakeArray()))
 
         class FakeDataProxy:
             def get_config(self):
-                return json.dumps({"save_path": str(tmp_path), "tiled_server_serving": None})
+                return json.dumps({"uri": "http://microscope:9091"})
 
         monkeypatch.setattr("asyncroscopy.mcp.mcp_server.DeviceProxy", lambda address: FakeDataProxy())
+        monkeypatch.setattr(
+            "asyncroscopy.mcp.mcp_server.from_uri",
+            lambda uri: {"frame.h5": tiled_node},
+        )
 
         server = MCPServer("test", "localhost", 1234, **mcp_kwargs(), verbose=False)
         result = server.get_data_from_key("frame.h5", max_values=4)
 
         assert result["key"] == "frame.h5"
+        assert result["uri"] == "http://microscope:9091"
         assert result["format"] == "hdf5"
+        assert result["attrs"] == {"source": "microscope"}
         assert result["datasets"] == [
             {
                 "name": "image/HAADF",
@@ -458,7 +472,6 @@ class TestMCPServerTypeMapping:
 class TestMCPToolInvocation:
     def test_wrapper_supports_positional_and_keyword(self, monkeypatch) -> None:
         # Mock Database and DeviceProxy to avoid connection errors
-        # Must patch where it is used (imported)
         monkeypatch.setattr("asyncroscopy.mcp.mcp_server.Database", lambda host, port: None)
 
         # Mock objects for wrapping
@@ -471,7 +484,7 @@ class TestMCPToolInvocation:
             {
                 "in_type": tango.CmdArgType.DevString,
                 "out_type": tango.CmdArgType.DevString,
-                "in_type_desc": "some string",
+                "in_type_desc": ":param config_json: (not documented)\n:type config_json: DevString",
                 "out_type_desc": "result",
             },
         )
@@ -486,8 +499,8 @@ class TestMCPToolInvocation:
         import inspect
 
         sig = inspect.signature(wrapper)
-        param_name = list(sig.parameters.keys())[0]
-        assert param_name == "arg"
+        param_name = list(sig.parameters.keys())[0]        
+        assert param_name == "config_json" 
         assert wrapper(**{param_name: "world"}) == "world"
 
     def test_void_wrapper_supports_no_args(self, monkeypatch) -> None:

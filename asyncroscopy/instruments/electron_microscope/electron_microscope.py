@@ -239,9 +239,13 @@ class ElectronMicroscope(Instrument):
         self._set_diffraction_shift(shift)
 
     @command(dtype_out=DevString)
-    def get_status(self) -> str:
+    def get_parameters(self) -> str:
         """ Get all status parameters"""
-        return self._get_status()
+        return self._get_parameters()
+
+    @command(dtype_in=DevString)
+    def set_screen(self, position: str)->None:
+        self._set_screen(position)
 
     @command()
     def calibrate_screen_current(self):
@@ -261,12 +265,12 @@ class ElectronMicroscope(Instrument):
 
     @command(dtype_out=DevVarFloatArray)
     def get_stage(self):
-        """Get the current stage position as [x, y, z, alpha, beta]  in m and radian respectively."""
+        """Get the current stage position as [x, y, z, alpha, beta], with x/y/z in meters and tilts in degrees."""
         return self._get_stage()
    
     @command(dtype_in=DevVarFloatArray)
     def move_stage(self, position):
-        """Move the stage to an absolute position [x, y, z, alpha, beta] in m and radian respectively."""
+        """Move the stage to [x, y, z, alpha, beta], with x/y/z in meters and tilts in degrees."""
         self._move_stage(position)
 
     @command()
@@ -320,6 +324,10 @@ class ElectronMicroscope(Instrument):
         pass
 
     @abstractmethod
+    def _set_screen(self, position):
+        pass
+
+    @abstractmethod
     def _set_screen_current(self, current):
         pass
     
@@ -360,7 +368,7 @@ class ElectronMicroscope(Instrument):
         pass
 
     @abstractmethod
-    def _get_status(self):
+    def _get_parameters(self):
         pass
 
     @abstractmethod
