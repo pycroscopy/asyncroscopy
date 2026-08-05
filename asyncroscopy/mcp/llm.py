@@ -233,6 +233,53 @@ class LLM(Device):
             return match.group(1)
         return text.strip()
 
+    async def _stream_agent(self, agent_executor, messages, agent_label: str = "") -> str:
+        """Run a create_agent executor while streaming tokens and tool calls to stdout."""
+        prefix = f"[{agent_label}] " if agent_label else ""
+        start_time = time.time()
+        first_token_received = False
+        final_content = ""
+
+        async for event in agent_executor.astream_events({"messages": messages}, version="v2"):
+            kind = event["event"]
+
+            if kind == "on_chat_model_start":
+                # A new generation round is starting (could be a tool-call round or the final answer)
+                start_time = time.time()
+                first_token_received = False
+
+            elif kind == "on_chat_model_stream":
+                chunk = event["data"]["chunk"]
+                if not first_token_received:
+                    ttft = time.time() - start_time
+                    print(f"\n{prefix}[DIAGNOSTIC]: Time to first token: {ttft:.2f}s")
+                    print(f"{prefix}[GENERATION]: ", end="")
+                    first_token_received = True
+                if chunk.content:
+                    print(chunk.content, end="")
+                    sys.stdout.flush()
+
+            elif kind == "on_chat_model_end":
+                output = event["data"]["output"]
+                tool_calls = getattr(output, "tool_calls", None) or []
+                if not tool_calls:
+                    # This round produced no tool calls -> it's the final answer
+                    final_content = (output.content or "").strip()
+                print()  # newline after this round's streamed text
+
+            elif kind == "on_tool_start":
+                tool_name = event["name"]
+                tool_input = event["data"].get("input")
+                print(f"{prefix}[EXECUTING TOOL]: {tool_name}({tool_input})")
+
+            elif kind == "on_tool_end":
+                output = event["data"].get("output")
+                print(f"{prefix}[TOOL RESULT]: {output}")
+
+        if final_content:
+            print(f"{prefix}[FINAL ANSWER RETURNED]:\n{final_content}\n{'='*50}")
+        return final_content
+
     async def _run_swarm(self, prompt: str) -> str:
         if not self._agents:
             return "Swarm Error: No agents available. Please use the SpawnAgent command to create at least one worker before querying."
@@ -240,7 +287,7 @@ class LLM(Device):
         # Fast path: no need for supervisor/routing overhead with a single agent
         if len(self._agents) == 1:
             agent = self._agents[0]
-            agent_tools = self._get_agent_tools(agent.tools)  # pull filter logic into a helper
+            agent_tools = self._get_agent_tools(agent.tools)
             print(f"[SYSTEM]: Binding {len(agent_tools)} tools to {agent.name}")
             agent_executor = create_agent(
                 model=self._model,
@@ -248,9 +295,9 @@ class LLM(Device):
                 system_prompt=agent.system_prompt
             )
             print(f"\n[{agent.name}] is working...")
-            result = await agent_executor.ainvoke({"messages": [HumanMessage(content=prompt)]})
-            return result["messages"][-1].content
-
+            return await self._stream_agent(
+                agent_executor, [HumanMessage(content=prompt)], agent_label=agent.name
+            )
 
         builder = StateGraph(AgentState)
         agent_names = [a.name for a in self._agents]
@@ -259,26 +306,19 @@ class LLM(Device):
         def create_agent_node(agent: Agent):
             agent_tools = self._get_agent_tools(agent.tools)
             print(f"[SYSTEM]: Binding {len(agent_tools)} tools to {agent.name}")
-            
+
             agent_executor = create_agent(
-                model=self._model, 
-                tools=agent_tools, 
+                model=self._model,
+                tools=agent_tools,
                 system_prompt=agent.system_prompt
             )
 
             async def node(state: AgentState):
                 print(f"\n[{agent.name}] is working...")
-                # Pass the conversation history into the agent's internal loop
-                result = await agent_executor.ainvoke({"messages": state["messages"]})
-                
-                # Extract the final answer from this agent
-                last_msg = result["messages"][-1]
-                
-                # We return it as a HumanMessage so the Supervisor reads it as standard text 
-                # rather than seeing messy internal tool-call logs. This saves context window
+                content = await self._stream_agent(agent_executor, state["messages"], agent_label=agent.name)
                 return {
                     "messages": [
-                        HumanMessage(content=f"[{agent.name}]: {last_msg.content}", name=agent.name)
+                        HumanMessage(content=f"[{agent.name}]: {content}", name=agent.name)
                     ]
                 }
             return node
