@@ -60,15 +60,6 @@ agent = [
     "langchain-mcp-adapters",    
 ]
 
-localagent = [
-    "accelerate",
-    "transformers",
-    "torch>=2.7.0",
-    "torchvision",
-    "bitsandbytes",
-    "langchain-huggingface",
-]
-
 ollama = [
     "langchain_ollama"
 ]
