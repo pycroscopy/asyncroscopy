@@ -39,6 +39,7 @@ project:
         - file: Operation/run-servers.md
         - file: Operation/run-server-gui.md
         - file: Operation/troubleshooting.md
+        - file: Operation/process_manager.md
     - title: Tiled Server
       children:
         - file: Tiled_server/data_integration.md

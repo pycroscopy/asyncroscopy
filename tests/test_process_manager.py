@@ -61,7 +61,7 @@ def test_start_process_tracks_process_group(tmp_path, monkeypatch):
 
 
 def test_stop_process_graceful_and_force(tmp_path, monkeypatch):
-    manager = ProcessManager(name="test_run", state_dir=tmp_path, graceful_timeout=0.1)
+    manager = ProcessManager(name="test_run", state_dir=tmp_path, timeout=0.1)
     signals = []
 
     class FakeProcess:

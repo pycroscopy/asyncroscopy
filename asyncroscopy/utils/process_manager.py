@@ -18,30 +18,41 @@ if str(PROJECT_DIR) not in sys.path:
 
 @dataclass
 class ManagedProcess:
-    key: str
-    label: str
-    process: subprocess.Popen
-    command: list[str] | None = None
-    stdout_lines: deque = field(default_factory=deque)
-    stderr_lines: deque = field(default_factory=deque)
+    key: str  # Unique identifier
+    label: str  # The human-readable name of the process
+    process: subprocess.Popen  # Actual handle of the process
+    command: list[str] | None = None  # The command that was run
+    stdout_lines: deque = field(default_factory=lambda: deque(maxlen=1000))  # Stdout buffer
+    stderr_lines: deque = field(default_factory=lambda: deque(maxlen=1000))  # Stderr buffer
 
     @property
     def pid(self) -> int:
+        """Returns the process ID."""
         return self.process.pid
 
     @property
     def running(self) -> bool:
+        """Returns True if the process is running."""
         return self.process.poll() is None
 
 
 class ProcessManager:
-    """Manages child subprocesses for a single launcher script."""
+    """
+    Manages child subprocesses for a single launcher script.
+
+    Args:
+        name: Unique identifier for this manager instance.
+        state_dir: Directory to store process state files.
+        timeout: Seconds to wait for a process to terminate before doing a forced kill.
+        max_output_lines: Max number of lines to buffer for stdout/stderr.
+    """
 
     def __init__(
         self,
         name: str = None,
         state_dir: str | Path = ".processes",
-        graceful_timeout: float = 5.0,
+        timeout: float = 5.0,
+        max_output_lines: int = 200,
     ):
         if name is None:
             name = Path(sys.argv[0]).stem
@@ -51,10 +62,11 @@ class ProcessManager:
         self.name = name
         self.state_dir = Path(state_dir)
         self.state_file = self.state_dir / f"{self.name}.json"
-        self.graceful_timeout = graceful_timeout
+        self.timeout = timeout
+        self.max_output_lines = max_output_lines
 
         self.active_processes: list[ManagedProcess] = []
-        self.history: list[ManagedProcess] = []
+        self.history: deque[ManagedProcess] = deque(maxlen=1000)
 
     def __enter__(self):
         self._cleanup_stale_state()
@@ -77,16 +89,23 @@ class ProcessManager:
         popen_kwargs.update(kwargs)
 
         # Start child process in its own group for clean tree termination
-        if os.name == "nt":
+        if os.name == "nt": # Windows
             popen_kwargs.setdefault(
                 "creationflags", subprocess.CREATE_NEW_PROCESS_GROUP
             )
-        else:
+        else: # Linux
             if "start_new_session" not in popen_kwargs and "preexec_fn" not in popen_kwargs:
                 popen_kwargs["start_new_session"] = True
 
         proc = subprocess.Popen(command, **popen_kwargs)
-        managed = ManagedProcess(key=key, label=label, process=proc, command=command)
+        managed = ManagedProcess(
+            key=key,
+            label=label,
+            process=proc,
+            command=command,
+            stdout_lines=deque(maxlen=self.max_output_lines),
+            stderr_lines=deque(maxlen=self.max_output_lines),
+        )
         self.active_processes.append(managed)
         self.history.append(managed) 
         self._drain(proc.stdout, managed.stdout_lines)
@@ -125,7 +144,7 @@ class ProcessManager:
 
         self._send_kill_request(managed.process)
         try:
-            managed.process.wait(timeout=self.graceful_timeout)
+            managed.process.wait(timeout=self.timeout)
         except subprocess.TimeoutExpired:
             self._force_kill(managed.process)
             managed.process.wait(timeout=1.0)
@@ -158,10 +177,11 @@ class ProcessManager:
                 if proc.poll() is not None:
                     continue
 
-                # Calculate remaining time from our global timeout
-                rem = self.graceful_timeout - (time.time() - start_time)
-                if rem <= 0:
-                    rem = 0.1
+                # Determine how much of the global timeout remains.
+                # If we have spent more time than allowed, provide a small wait
+                # to allow for immediate process exit before doing a forced kill.
+                elapsed = time.time() - start_time
+                rem = max(0.1, self.timeout - elapsed)
 
                 try:
                     proc.wait(timeout=rem)
@@ -220,7 +240,7 @@ class ProcessManager:
                 capture_output=True,
             )
             try:
-                proc.wait(timeout=self.graceful_timeout)
+                proc.wait(timeout=self.timeout)
             except subprocess.TimeoutExpired:
                 pass
         else:
@@ -231,7 +251,7 @@ class ProcessManager:
                 proc.terminate()
 
             try:
-                proc.wait(timeout=self.graceful_timeout)
+                proc.wait(timeout=self.timeout)
             except subprocess.TimeoutExpired:
                 try:
                     pgid = os.getpgid(proc.pid)
