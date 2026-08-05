@@ -24,10 +24,10 @@ try:
     from langchain.chat_models import init_chat_model
     from langchain_core.tools import BaseTool
     from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
-    from langchain_mcp_adapters.client import MultiServerMCPClient
-    
-    from langgraph.graph import END, START, StateGraph
     from langchain.agents import create_agent
+    from langchain_mcp_adapters.client import MultiServerMCPClient
+
+    from langgraph.graph import END, START, StateGraph
 except ImportError:
     print("Missing dependencies! Please run:")
     print("uv sync --extra agent")
@@ -36,13 +36,16 @@ except ImportError:
 
 @dataclass
 class Agent:
+    """Represents a single AI agent in the swarm."""
     name: str
     system_prompt: str
     model: str
     tools: list[str]  # List of tool names, supporting glob patterns (e.g., ["math_*", "read_file"])
     description: str = ""
 
+
 class AgentState(TypedDict):
+    """State dictionary for each Agent node in the swarm graph."""
     messages: Annotated[Sequence[BaseMessage], operator.add]
     next_agent: str
 
@@ -63,8 +66,9 @@ class LLM(Device):
         # Registries
         self._agents: list[Agent] = []
         self._tools: list[BaseTool] = []
-        self._mcp_clients: list[MultiServerMCPClient] = [] # Prevents client GC and connection dropping
+        self._mcp_clients: list[MultiServerMCPClient] = []  # Prevents client GC and connection dropping
 
+        # Setup asyncio event loop
         signal.signal(signal.SIGINT, signal.SIG_DFL)
         self._loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self._loop)
@@ -73,32 +77,34 @@ class LLM(Device):
             if not self.use_init_chat_model or self.model_provider == "ollama":
                 self.ensure_ollama_running()
 
-            if self.use_init_chat_model:
-                self.info_stream(f"Initializing via init_chat_model")
+            if self.use_init_chat_model: # Initialize from most model providers (e.g., OpenAI)
+                self.info_stream("Initializing via init_chat_model")
                 self._model = init_chat_model(
                     model=self.ollama_model,
                     model_provider=self.model_provider,
                     temperature=0
                 )
-            else:
+            else: # Initialize locally via Ollama
                 from langchain_ollama import ChatOllama
-                self.info_stream(f"Initializing via ChatOllama")
+                self.info_stream("Initializing via ChatOllama")
                 self._model = ChatOllama(
                     model=self.ollama_model,
                     temperature=0,
                     reasoning=False,
                 )
-            
+
             print("\n[SYSTEM]: Pre-warming model into VRAM (Cold Start)...")
             sys.stdout.flush()
             start_warmup = time.time()
             self._loop.run_until_complete(self._model.ainvoke([HumanMessage(content=" ")]))
             print(f"[SYSTEM]: Model pre-warmed in {time.time() - start_warmup:.2f}s!")
 
+            # Connect to an MCP server initially if specified
             if self.mcp_url:
-                if not self.ConnectMCP([self.mcp_url, "streamable_http"]):
+                config = json.dumps({"url": self.mcp_url, "transport": "streamable_http"})
+                if not self.ConnectMCP(config):
                     print(f"[SYSTEM]: Failed to connect to MCP Server at {self.mcp_url}.")
-            
+
             self.set_state(tango.DevState.ON)
         except Exception as e:
             self.set_state(tango.DevState.FAULT)
@@ -123,6 +129,7 @@ class LLM(Device):
         self._max_steps = value
 
     def ensure_ollama_running(self, host: str = "http://localhost:11434", timeout: int = 10) -> None:
+        """Check if Ollama server is running, starting it if necessary."""
         tags_url = f"{host.rstrip('/')}/api/tags"
         try:
             with urllib.request.urlopen(tags_url, timeout=1):
@@ -135,7 +142,7 @@ class LLM(Device):
                 ["ollama", "serve"],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-                start_new_session=True 
+                start_new_session=True
             )
         except FileNotFoundError:
             raise RuntimeError("Ollama binary not found on PATH.")
@@ -152,6 +159,7 @@ class LLM(Device):
 
     @command(dtype_in=str, dtype_out=str)
     def Query(self, prompt: str) -> str:
+        """Query the agent swarm with a prompt, returning the final response."""
         self.set_state(tango.DevState.RUNNING)
         try:
             return self._loop.run_until_complete(self._run_swarm(prompt))
@@ -162,69 +170,71 @@ class LLM(Device):
             self.set_state(tango.DevState.ON)
 
     @command(
-        dtype_in=[str],
-        doc_in="List of strings: [url, transport_type]",
+        dtype_in=str,
+        doc_in="JSON config of the MCP server: {'url': '...', 'transport': '...'}",
         dtype_out=bool,
         doc_out="Success status"
     )
-    def ConnectMCP(self, args: list[str]) -> bool:
-        if len(args) < 1:
-            raise ValueError("ConnectMCP requires at least one argument: [url, transport_type]")
-        elif len(args) == 1: # No transport type provided, default to streamable_http
-            args.append("streamable_http")
-        elif len(args) >= 2:
-            if args[1] not in ["streamable_http", "websocket"]:
-                raise ValueError("Invalid transport type. Must be 'streamable_http' or 'websocket'.")
-        
-        async def connect_and_fetch_tools():
-            server_id = f"server_{len(self._mcp_clients)}"
-            client = MultiServerMCPClient({
-                server_id: {"url": args[0], "transport": args[1]}
-            })
-            tools = await client.get_tools()
-            return client, tools
+    def ConnectMCP(self, config: str) -> bool:
+        """Connect to an MCP server and inherit its tools. Returns true for success."""
+        try:
+            args = json.loads(config)
+            url = args.get("url")
+            transport = args.get("transport", "streamable_http")
 
-        print(f"\n[SYSTEM]: Connecting to MCP Server at {args[0]}...")
-        client, tools = self._loop.run_until_complete(connect_and_fetch_tools())
-        
-        self._mcp_clients.append(client)
-        self._tools.extend(tools)
-        print(f"[SYSTEM]: Connected. Inherited {len(tools)} tools.")
-        
+            async def connect_and_fetch_tools():
+                server_id = f"server_{len(self._mcp_clients)}"
+                client = MultiServerMCPClient({server_id: {"url": url, "transport": transport}})
+                tools = await client.get_tools()
+                return client, tools
+
+            print(f"\n[SYSTEM]: Connecting to MCP Server at {url}...")
+            client, tools = self._loop.run_until_complete(connect_and_fetch_tools())
+
+            self._mcp_clients.append(client)
+            self._tools.extend(tools)
+            print(f"[SYSTEM]: Connected. Inherited {len(tools)} tools.")
+        except Exception as e:
+            self.error_stream(f"Failed to connect to MCP server: {e}")
+            return False
+
         return True
 
     @command(
         dtype_in=str,
-        doc_in="JSON configuration of the Agent: {'name': '...', 'system_prompt': '...', 'model': '...', 'tools': ['*']}",
+        doc_in="JSON config of the Agent: {'name': '...', 'system_prompt': '...', 'model': '...', 'tools': ['*']}",
         dtype_out=bool,
         doc_out="Success status"
     )
-    def SpawnAgent(self, agent_config_json: str) -> bool:
-        """Dynamically creates a new AI worker node in the swarm."""
+    def SpawnAgent(self, config: str) -> bool:
+        """Creates a new agent in the swarm."""
         try:
-            config = json.loads(agent_config_json)
+            args = json.loads(config)
             agent = Agent(
-                name=config["name"],
-                system_prompt=config["system_prompt"],
-                model=config.get("model", self.ollama_model),
-                tools=config.get("tools", ["*"]),
-                description=config.get("description", "")
+                name=args["name"],
+                system_prompt=args["system_prompt"],
+                model=args.get("model", self.ollama_model),
+                tools=args.get("tools", ["*"]),
+                description=args.get("description", "")
             )
             self._agents.append(agent)
             print(f"\n[SYSTEM]: Successfully spawned agent '{agent.name}'")
             return True
         except Exception as e:
             self.error_stream(f"Failed to spawn agent: {e}")
-            raise RuntimeError(f"SpawnAgent Error: {e}")
+            return False
 
-    # Helper to filter tools via glob patterns
     def _get_agent_tools(self, allowed_patterns: list[str]) -> list:
-        if "*" in allowed_patterns: return self._tools
-        filtered = []
-        for t in self._tools:
-            if any(fnmatch.fnmatch(t.name, pat) for pat in allowed_patterns):
-                filtered.append(t)
-        return filtered
+        """Returnes a list of filtered tools based on the allowed glob patterns."""
+        if "*" in allowed_patterns:
+            return self._tools
+        return [t for t in self._tools if any(fnmatch.fnmatch(t.name, pat) for pat in allowed_patterns)]
+
+    def _build_agent_executor(self, agent: Agent):
+        """Filter this agent's tools and construct its ReAct executor."""
+        agent_tools = self._get_agent_tools(agent.tools)
+        print(f"[SYSTEM]: Binding {len(agent_tools)} tools to {agent.name}")
+        return create_agent(model=self._model, tools=agent_tools, system_prompt=agent.system_prompt)
 
     def _extract_json(self, text: str) -> str:
         """Strip markdown code fences (```json ... ``` or ``` ... ```) if present."""
@@ -232,6 +242,16 @@ class LLM(Device):
         if match:
             return match.group(1)
         return text.strip()
+
+    def _parse_routing_decision(self, content: str, valid_options: list[str], fallback: str) -> str:
+        """Parse a supervisor response's {'next': ...} decision, falling back on any error or invalid value."""
+        try:
+            decision = json.loads(self._extract_json(content))
+            next_agent = decision.get("next", fallback)
+            return next_agent if next_agent in valid_options else fallback
+        except Exception as e:
+            print(f"[SUPERVISOR ERROR]: {e}")
+            return fallback
 
     async def _stream_agent(self, agent_executor, messages, agent_label: str = "") -> str:
         """Run a create_agent executor while streaming tokens and tool calls to stdout."""
@@ -277,23 +297,18 @@ class LLM(Device):
                 print(f"{prefix}[TOOL RESULT]: {output}")
 
         if final_content:
-            print(f"{prefix}[FINAL ANSWER RETURNED]:\n{final_content}\n{'='*50}")
+            print(f"{prefix}[FINAL ANSWER RETURNED]:\n{final_content}\n{'=' * 50}")
         return final_content
 
     async def _run_swarm(self, prompt: str) -> str:
+        """Run the agent swarm with a given prompt, returning the final response."""
         if not self._agents:
             return "Swarm Error: No agents available. Please use the SpawnAgent command to create at least one worker before querying."
 
         # Fast path: no need for supervisor/routing overhead with a single agent
         if len(self._agents) == 1:
             agent = self._agents[0]
-            agent_tools = self._get_agent_tools(agent.tools)
-            print(f"[SYSTEM]: Binding {len(agent_tools)} tools to {agent.name}")
-            agent_executor = create_agent(
-                model=self._model,
-                tools=agent_tools,
-                system_prompt=agent.system_prompt
-            )
+            agent_executor = self._build_agent_executor(agent)
             print(f"\n[{agent.name}] is working...")
             return await self._stream_agent(
                 agent_executor, [HumanMessage(content=prompt)], agent_label=agent.name
@@ -301,21 +316,16 @@ class LLM(Device):
 
         builder = StateGraph(AgentState)
         agent_names = [a.name for a in self._agents]
+        options = agent_names + ["FINISH"]
 
         # Creates a ReAct sub-graph for each Agent
         def create_agent_node(agent: Agent):
-            agent_tools = self._get_agent_tools(agent.tools)
-            print(f"[SYSTEM]: Binding {len(agent_tools)} tools to {agent.name}")
-
-            agent_executor = create_agent(
-                model=self._model,
-                tools=agent_tools,
-                system_prompt=agent.system_prompt
-            )
+            agent_executor = self._build_agent_executor(agent)
 
             async def node(state: AgentState):
                 print(f"\n[{agent.name}] is working...")
                 content = await self._stream_agent(agent_executor, state["messages"], agent_label=agent.name)
+                print(f"[{agent.name}] finished.\n")
                 return {
                     "messages": [
                         HumanMessage(content=f"[{agent.name}]: {content}", name=agent.name)
@@ -327,61 +337,45 @@ class LLM(Device):
         for agent in self._agents:
             builder.add_node(agent.name, create_agent_node(agent))
 
-        # Supervisor Node
-        options = agent_names + ["FINISH"]
-        
+        agent_roster = "\n".join(
+            f"- {a.name}: {a.description or a.system_prompt}" for a in self._agents
+        )
+
         async def supervisor_node(state: AgentState):
             print("\n[Supervisor] Evaluating routing...")
 
-            # An agent has "contributed" if there's an AI/Human message beyond the original user prompt
+            # Check if agent has contributed if there's another AI/Human message beyond the original user prompt
             has_delegated = len(state["messages"]) > 1
 
             if not has_delegated:
-                # First turn: force a delegation, don't even ask the model whether to finish
-                available = [n for n in agent_names]
-                agent_roster = "\n".join(
-                    f"- {a.name}: {a.description or a.system_prompt}" for a in self._agents
+                # First turn forces subagent routing
+                instructions = (
+                    f"Below are the available agents and what each is for:\n{agent_roster}\n\n"
+                    "Based on the conversation, decide which agent should act next to progress the user's request.\n"
+                    "Only output FINISH if the user's request has been fully and concretely answered — "
+                    "not if an agent asked a question or said it couldn't complete the task; in that case, "
+                    "route to a different agent who might be able to help instead."
                 )
+                valid_options, fallback = agent_names, agent_names[0]
+            else:
+                # Later turns either do normal routing or FINISH
+                instructions = (
+                    f"Active agents: {agent_names}.\n"
+                    "Based on the conversation, decide who should act next.\n"
+                    "If the user's request is fully resolved, output FINISH."
+                )
+                valid_options, fallback = options, "FINISH"
 
-                sys_prompt = SystemMessage(
-                    content=(
-                        "You are the Swarm Supervisor. Below are the available agents and what each is for:\n"
-                        f"{agent_roster}\n\n"
-                        "Based on the conversation, decide which agent should act next to progress the user's request.\n"
-                        "Only output FINISH if the user's request has been fully and concretely answered — "
-                        "not if an agent asked a question or said it couldn't complete the task; in that case, "
-                        "route to a different agent who might be able to help instead.\n"
-                        f"Respond with JSON containing a single key 'next' mapping to one of: {options}"
-                    )
-                )               
-                response = await self._model.ainvoke([sys_prompt] + state["messages"])
-                try:    
-                    decision = json.loads(self._extract_json(response.content))
-                    next_agent = decision.get("next")
-                    if next_agent not in available:
-                        next_agent = available[0]  # fallback: just pick the first agent
-                except Exception as e:
-                    next_agent = available[0]
-                    print(f"[SUPERVISOR ERROR]: {e}")
-                return {"next_agent": next_agent}
-
-            # Later turns: normal routing, FINISH is a valid choice
             sys_prompt = SystemMessage(
                 content=(
-                    f"You are the Swarm Supervisor. Active agents: {agent_names}.\n"
-                    "Based on the conversation, decide who should act next.\n"
-                    "If the user's request is fully resolved, output FINISH.\n"
+                    f"You are the Swarm Supervisor. {instructions}\n"
                     f"Respond with JSON containing a single key 'next' mapping to one of: {options}"
                 )
             )
             response = await self._model.ainvoke([sys_prompt] + state["messages"])
-            try:
-                decision = json.loads(self._extract_json(response.content))
-                next_agent = decision.get("next", "FINISH")
-                if next_agent not in options:
-                    next_agent = "FINISH"
-            except Exception:
-                next_agent = "FINISH"
+            next_agent = self._parse_routing_decision(response.content, valid_options, fallback)
+            if next_agent == "FINISH":
+                print("[Supervisor] Decision: FINISH\n")
             return {"next_agent": next_agent}
 
         builder.add_node("Supervisor", supervisor_node)
@@ -400,7 +394,7 @@ class LLM(Device):
         graph = builder.compile()
 
         # Graph execution loop
-        print(f"\n{'='*50}\n[NEW REQUEST]: {prompt}\n{'='*50}")
+        print(f"\n{'='*50}\n[NEW REQUEST]: {prompt}\n{'=' * 50}")
 
         last_response = None
         async for chunk in graph.astream(
@@ -410,10 +404,10 @@ class LLM(Device):
             for node_name, state_update in chunk.items():
                 if node_name != "Supervisor" and "messages" in state_update:
                     msg = state_update["messages"][-1]
-                    print(f"{msg.content}")
                     last_response = msg.content
 
         return last_response if last_response is not None else "Swarm Error: No agent produced a response before routing finished."
+
 
 if __name__ == "__main__":
     LLM.run_server()
