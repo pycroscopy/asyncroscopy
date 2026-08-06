@@ -1,3 +1,4 @@
+import json
 import sys
 import argparse
 import os
@@ -15,22 +16,31 @@ if str(PROJECT_DIR) not in sys.path:
     sys.path.insert(0, str(PROJECT_DIR))
 
 from asyncroscopy.utils.process_manager import ManagedProcess, ProcessManager
+from asyncroscopy.mcp.llm import Agent
 
 DEVICE_NAME = "asyncroscopy/llm/default"
 INSTANCE_NAME = "llm_instance"
 DEFAULT_CONFIG_PATH = PROJECT_DIR / 'configs' / 'gemma-llm.yaml'
 
+@dataclass 
+class TangoConfig:
+    host: str
+    port: int
 
 @dataclass
 class LLMConfig:
-    tango_host: str
-    tango_port: int
+    tango: TangoConfig
     mcp_url: str
     local_model_path: str | None = None
     model_provider: str | None = None
     model_name: str | None = None
     api_key: str | None = None
+    startup_agents: list[Agent] | None = None
 
+    def __post_init__(self):
+        # Convert tango dict to TangoConfig
+        if isinstance(self.tango, dict):
+            self.tango = TangoConfig(**self.tango)
 
 def _require(mapping: dict, key: str, where: str):
     if not isinstance(mapping, dict) or key not in mapping:
@@ -42,17 +52,7 @@ def load_config(path: Path) -> LLMConfig:
     if not path.exists():
         raise FileNotFoundError(f'Config file not found: {path}')
     raw = yaml.safe_load(path.read_text(encoding='utf-8')) or {}
-    tango = _require(raw, 'tango', '(top level)')
-    return LLMConfig(
-        tango_host=_require(tango, 'host', 'tango'),
-        tango_port=int(_require(tango, 'port', 'tango')),
-        mcp_url=_require(raw, 'mcp_url', 'mcp'),
-        local_model_path=raw.get("local_model_path"),
-        model_provider=raw.get("model_provider"),
-        model_name=raw.get("model_name"),
-        api_key=raw.get("api_key"),
-    )
-
+    return LLMConfig(**raw)
 
 def register_device(config: LLMConfig | None):
     database = tango.Database()
@@ -70,7 +70,9 @@ def register_device(config: LLMConfig | None):
         properties = {}
         for key, value in config.__dict__.items():
             if key != "tango":
-                properties[key] = [value]
+                properties[key] = value
+                if key == "startup_agents":
+                    properties[key] = [json.dumps(agent) for agent in value]
         
         database.put_device_property(DEVICE_NAME, properties)
         print(f"Set device properties: {properties}")
@@ -89,7 +91,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f'Config error: {exc}', file=sys.stderr)
         return 1
 
-    tango_host = f'{config.tango_host}:{config.tango_port}'
+    tango_host = f'{config.tango.host}:{config.tango.port}'
     os.environ['TANGO_HOST'] = tango_host
 
     register_device(config)

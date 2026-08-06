@@ -39,8 +39,8 @@ class Agent:
     """Represents a single AI agent in the swarm."""
     name: str
     system_prompt: str
-    model: str
     tools: list[str]  # List of tool names, supporting glob patterns (e.g., ["math_*", "read_file"])
+    model: str | None = None
     description: str = ""
 
 
@@ -52,6 +52,7 @@ class AgentState(TypedDict):
 
 class LLM(Device):
     mcp_url = device_property(dtype=str, default_value="http://127.0.0.1:8000/mcp")
+    startup_agents = device_property(dtype=(str,), default_value=())
     ollama_model = device_property(dtype=str, default_value="gemma4:31b")
     use_init_chat_model = device_property(dtype=bool, default_value=False)
     model_provider = device_property(dtype=str, default_value="ollama")
@@ -66,7 +67,11 @@ class LLM(Device):
         # Registries
         self._agents: list[Agent] = []
         self._tools: list[BaseTool] = []
-        self._mcp_clients: list[MultiServerMCPClient] = []  # Prevents client GC and connection dropping
+        self._mcp_clients: list[MultiServerMCPClient] = []
+
+        if self.startup_agents:
+            self._agents = [Agent(**json.loads(agent_json)) for agent_json in self.startup_agents]
+            print(f"[SYSTEM]: Loaded startup agents: {self._agents}")
 
         # Setup asyncio event loop
         signal.signal(signal.SIGINT, signal.SIG_DFL)
@@ -127,6 +132,11 @@ class LLM(Device):
         if value < 1:
             raise ValueError("max_steps must be at least 1.")
         self._max_steps = value
+
+    @attribute(dtype=(str,), max_dim_x=100)
+    def agents(self) -> list[str]:
+        """Return a list of the names of all currently spawned agents."""
+        return [agent.name for agent in self._agents]
 
     def ensure_ollama_running(self, host: str = "http://localhost:11434", timeout: int = 10) -> None:
         """Check if Ollama server is running, starting it if necessary."""
@@ -408,6 +418,9 @@ class LLM(Device):
 
         return last_response if last_response is not None else "Swarm Error: No agent produced a response before routing finished."
 
+# ----------------------------------------------------------------------
+# Server entry point
+# ----------------------------------------------------------------------
 
 if __name__ == "__main__":
     LLM.run_server()
