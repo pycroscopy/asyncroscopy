@@ -47,6 +47,7 @@ class AgentState(TypedDict):
     """State dictionary for each Agent node in the swarm graph."""
     messages: Annotated[Sequence[BaseMessage], operator.add]
     next_agent: str
+    current_task: str
 
 
 class LLM(Device):
@@ -243,15 +244,17 @@ class LLM(Device):
             return match.group(1)
         return text.strip()
 
-    def _parse_routing_decision(self, content: str, valid_options: list[str], fallback: str) -> str:
+    def _parse_routing_decision(self, content: str, valid_options: list[str], fallback: str) -> tuple[str, str]:
         """Parse a supervisor response's {'next': ...} decision, falling back on any error or invalid value."""
         try:
             decision = json.loads(self._extract_json(content))
             next_agent = decision.get("next", fallback)
-            return next_agent if next_agent in valid_options else fallback
+            subtask = decision.get("task", "")
+
+            return next_agent if next_agent in valid_options else fallback, subtask
         except Exception as e:
             print(f"[SUPERVISOR ERROR]: {e}")
-            return fallback
+            return fallback, ""
 
     async def _stream_agent(self, agent_executor, messages, agent_label: str = "") -> str:
         """Run a create_agent executor while streaming tokens and tool calls to stdout."""
@@ -323,8 +326,10 @@ class LLM(Device):
             agent_executor = self._build_agent_executor(agent)
 
             async def node(state: AgentState):
-                print(f"\n[{agent.name}] is working...")
-                content = await self._stream_agent(agent_executor, state["messages"], agent_label=agent.name)
+                task = state.get("current_task", "Execute assigned tool.")
+                print(f"\n[{agent.name}] assigned task: '{task}'")
+
+                content = await self._stream_agent(agent_executor, [HumanMessage(content=task)], agent_label=agent.name)
                 print(f"[{agent.name}] finished.\n")
                 return {
                     "messages": [
@@ -369,14 +374,23 @@ class LLM(Device):
             sys_prompt = SystemMessage(
                 content=(
                     f"You are the Swarm Supervisor. {instructions}\n"
-                    f"Respond with JSON containing a single key 'next' mapping to one of: {options}"
+                    "Respond with JSON containing two keys:\n"
+                    f"1. 'next': One of {options}\n"
+                    "2. 'task': The exact, isolated sub-task that ONLY this specific agent should perform right now. "
+                    "Do NOT include steps intended for other agents.\n\n"
+                    "Example output:\n"
+                    '{"next": "image", "task": "Acquire a scanned HAADF image."}'
                 )
-            )
+            )           
             response = await self._model.ainvoke([sys_prompt] + state["messages"])
-            next_agent = self._parse_routing_decision(response.content, valid_options, fallback)
+            next_agent, subtask = self._parse_routing_decision(response.content, valid_options, fallback)
             if next_agent == "FINISH":
                 print("[Supervisor] Decision: FINISH\n")
-            return {"next_agent": next_agent}
+
+            return {
+                "next_agent": next_agent,
+                "current_task": subtask,
+            }
 
         builder.add_node("Supervisor", supervisor_node)
         builder.add_edge(START, "Supervisor")
