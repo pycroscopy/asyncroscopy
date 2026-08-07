@@ -107,9 +107,13 @@ class ProcessManager:
             stderr_lines=deque(maxlen=self.max_output_lines),
         )
         self.active_processes.append(managed)
-        self.history.append(managed) 
+        self.history.append(managed)
         self._drain(proc.stdout, managed.stdout_lines)
         self._drain(proc.stderr, managed.stderr_lines)
+        # Persisted immediately, not just on stop: if this process dies
+        # ungracefully (crash, force-kill), the next launch's
+        # _cleanup_stale_state() needs its PID on disk to find and reap it.
+        self.save()
         return managed
 
     @staticmethod
