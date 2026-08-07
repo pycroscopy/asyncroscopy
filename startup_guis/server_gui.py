@@ -12,7 +12,6 @@ if str(PROJECT_DIR) not in sys.path:
 # Import Qt through qt_compat so this GUI can use PyQt6 normally and PyQt5 on 
 # legacy Windows 10 systems that cannot load Qt6. 
 from startup_guis.qt_compat import (  # noqa: E402 
-    HORIZONTAL, 
     VERTICAL, 
     QApplication, 
     QCheckBox, 
@@ -42,7 +41,6 @@ DEVICE_MODULES = {
     'corrector': 'asyncroscopy.instruments.electron_microscope.hardware.corrector', 
     'data': 'asyncroscopy.data.data', 
     'eds': 'asyncroscopy.instruments.electron_microscope.detectors.eds', 
-    'flucam': 'asyncroscopy.instruments.electron_microscope.detectors.flucam', 
     'scan': 'asyncroscopy.instruments.electron_microscope.hardware.scan', 
     'stage': 'asyncroscopy.instruments.electron_microscope.hardware.stage', 
 } 

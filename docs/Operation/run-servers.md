@@ -37,7 +37,7 @@ uv run startup_scripts/run_mcp.py --yaml configs/mcp.yaml
 
 | Order | Device(s) | Tango name |
 |-------|-----------|------------|
-| 1 | support devices | `asyncroscopy/{camera,corrector,data,eds,flucam,scan,stage}/default` |
+| 1 | support devices | `asyncroscopy/{camera,corrector,data,eds,scan,stage}/default` |
 | 2 | Tiled HTTP server | started through the `data` device |
 | 3 | instrument | `asyncroscopy/instrument/default` |
 

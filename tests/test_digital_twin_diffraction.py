@@ -131,7 +131,16 @@ def test_particle_camera_acquisition_saves_local_lattice_metadata(monkeypatch, t
         lambda particle, rattle_value, imsize: np.ones((imsize, imsize), dtype=np.float32),
     )
 
-    saved_path = Path(twin._acquire_camera_image(32, 0.1, 'BM-Ceta', 'Full'))
+    saved_path = Path(
+        twin._acquire_camera_image(
+            32,
+            0.1,
+            'BM-Ceta',
+            'Half',
+            frame_combining=6,
+            electron_counting=False,
+        )
+    )
 
     with h5py.File(saved_path, 'r') as h5:
         attrs = h5['image'].attrs
@@ -139,6 +148,10 @@ def test_particle_camera_acquisition_saves_local_lattice_metadata(monkeypatch, t
         assert attrs['particle_center_lattice_parameter_angstrom'] == particle['center_lattice_parameter']
         assert attrs['particle_lattice_strain_fraction'] == particle['lattice_strain_fraction']
         assert attrs['particle_lattice_strain_percent'] == 100.0 * particle['lattice_strain_fraction']
+        assert attrs['exposure_time'] == pytest.approx(0.1)
+        assert attrs['readout_area'] == 'Half'
+        assert attrs['frame_combining'] == 6
+        assert bool(attrs['electron_counting']) is False
 
 
 def test_off_particle_camera_acquisition_saves_vacuum_diffraction(tmp_path: Path):

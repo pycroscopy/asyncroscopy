@@ -6,6 +6,8 @@ It does NOT talk to AutoScript directly — the STEMMicroscope device
 reads these attributes via DeviceProxy before acquiring.
 """
 
+import tango
+
 from tango import AttrWriteType, DevState
 from tango.server import Device, attribute
 from abc import abstractmethod
@@ -24,6 +26,7 @@ class STAGE(Device):
     # ------------------------------------------------------------------
     # Attributes
     # ------------------------------------------------------------------
+
     beta_tilt_enabled = attribute(
         label="Beta tilt enabled",
         dtype=bool,
@@ -40,13 +43,14 @@ class STAGE(Device):
         doc="Stage position [x, y, z, alpha, beta], with tilts in degrees",
     )
 
-    x = attribute(
-        label="Position",
-        dtype=float,
+    position = attribute(
+        label="Stage Position",
+        dtype=(float,),
+        max_dim_x=5,
         access=AttrWriteType.READ_WRITE,
         unit="m",
-        # min_value= TODO: set these
-        # max_value= TODO: set these
+        # min_value= TODO: set these - AS-example -  specimen.stage.get_axis_limits
+        # max_value= TODO: set these - AS-example -  specimen.stage.get_axis_limits
         doc="Stage X position in meters",
     )
 
@@ -85,8 +89,8 @@ class STAGE(Device):
         dtype=float,
         access=AttrWriteType.READ_WRITE,
         unit="degrees",
-        min_value = -20,
-        max_value = 20,
+        min_value = -15,
+        max_value = 15,
         doc="Stage beta tilt in degrees",
     )
 
@@ -97,9 +101,23 @@ class STAGE(Device):
     def init_device(self) -> None:
         Device.init_device(self)
         self.set_state(DevState.ON)
-        self._position = [0.0, 0.0, 0.0, 0.0, 0.0]
+
+        # Start with zeros, TODO: get real numbers during initialization
+        self._beta_tilt_enabled: bool = False
+        self._x: float = 0.0
+        self._y: float = 0.0
+        self._z: float = 0.0
+        self._alpha: float = 0.0
+        self._beta: float = 0.0
+
 
         self.info_stream("STAGE device initialised")
+
+    # Set up microscope proxy
+    def _init_microscope_proxy(self):
+        """Connect to the microscope on first use."""
+        self._microscope = tango.DeviceProxy("asyncroscopy/microscope/default")
+
 
     # ------------------------------------------------------------------
     # Attribute read / write
@@ -127,52 +145,34 @@ class STAGE(Device):
         pass
 
     def read_x(self) -> float:
-        return self.read_position()[0]
+        return self._x
 
     def write_x(self, value: float) -> None:
-        position = self.read_position()
-        position[0] = float(value)
-        self.write_position(position)
+        self._x = value
 
     def read_y(self) -> float:
-        return self.read_position()[1]
+        return self._y
 
     def write_y(self, value: float) -> None:
-        position = self.read_position()
-        position[1] = float(value)
-        self.write_position(position)
+        self._y = value
 
     def read_z(self) -> float:
-        return self.read_position()[2]
+        return self._z
 
     def write_z(self, value: float) -> None:
-        position = self.read_position()
-        position[2] = float(value)
-        self.write_position(position)
+        self._z = value
 
     def read_alpha(self) -> float:
-        return self.read_position()[3]
+        return self._alpha
 
     def write_alpha(self, value: float) -> None:
-        position = self.read_position()
-        position[3] = float(value)
-        self.write_position(position)
+        self._alpha = value
 
     def read_beta(self) -> float:
-        position = self.read_position()
-        if len(position) < 5:
-            return 0.0
-        return position[4]
+        return self._beta
 
     def write_beta(self, value: float) -> None:
-        if not self.read_beta_tilt_enabled():
-            if float(value) == 0.0:
-                return
-            raise ValueError("This stage does not support beta tilt")
-        position = self.read_position()
-        position[4] = float(value)
-        self.write_position(position)
-
+        self._beta = value
 
 # ----------------------------------------------------------------------
 # Server entry point

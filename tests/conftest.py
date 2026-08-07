@@ -24,7 +24,6 @@ from tango.test_context import MultiDeviceTestContext
 # Import device classes to test
 from asyncroscopy.instruments.electron_microscope.detectors.camera import CAMERA
 from asyncroscopy.instruments.electron_microscope.detectors.eds import EDS
-from asyncroscopy.instruments.electron_microscope.detectors.flucam import FLUCAM
 from asyncroscopy.instruments.electron_microscope.hardware.scan import SCAN
 from asyncroscopy.instruments.electron_microscope.hardware.TestStage import TestStage
 from asyncroscopy.instruments.electron_microscope.digital_twin import DigitalTwin
@@ -104,15 +103,6 @@ def tango_ctx(data_save_dir):
             ],
         },
         {
-            "class": FLUCAM,
-            "devices": [
-                {
-                    "name": "asyncroscopy/flucam/default",
-                    "properties": {},
-                }
-            ],
-        },
-        {
             "class": TestStage,
             "devices": [
                 {
@@ -140,7 +130,6 @@ def tango_ctx(data_save_dir):
                         "eds_device_address": "asyncroscopy/eds/default",
                         "stage_device_address": "asyncroscopy/stage/default",
                         "camera_device_address": "asyncroscopy/camera/default",
-                        "flucam_device_address": "asyncroscopy/flucam/default",
                         "acquisition_save_directory": str(data_save_dir),
                     },
                 }
@@ -156,7 +145,6 @@ def tango_ctx(data_save_dir):
                         "testing_mode_bool": True,
                         "scan_device_address": "asyncroscopy/scan/default",
                         "camera_device_address": "asyncroscopy/camera/default",
-                        "flucam_device_address": "asyncroscopy/flucam/default",
                         "eds_device_address": "asyncroscopy/eds/default",
                         "stage_device_address": "asyncroscopy/stage/default",
                         "data_device_address": "asyncroscopy/data/default",
@@ -208,11 +196,6 @@ def eds_proxy(tango_ctx):
 @pytest.fixture(scope="session")
 def camera_proxy(tango_ctx):
     return tango.DeviceProxy(tango_ctx.get_device_access("asyncroscopy/camera/default"))
-
-
-@pytest.fixture(scope="session")
-def flucam_proxy(tango_ctx):
-    return tango.DeviceProxy(tango_ctx.get_device_access("asyncroscopy/flucam/default"))
 
 
 @pytest.fixture(scope="session")
@@ -327,13 +310,25 @@ def patched_scanned_data_acquisition(monkeypatch: pytest.MonkeyPatch):
 def patched_camera_path_acquisition(monkeypatch: pytest.MonkeyPatch, tmp_path):
     calls = []
 
-    def fake_acquire(self, imsize: int, exposure_time: float, detector: str, readout_area: str):
+    def fake_acquire(
+        self,
+        imsize: int,
+        exposure_time: float,
+        detector: str,
+        readout_area: str,
+        frame_combining: int = 1,
+        electron_counting: bool = True,
+        output_format: str = ".h5",
+    ):
         calls.append(
             {
                 "imsize": imsize,
                 "exposure_time": exposure_time,
                 "detector": detector,
                 "readout_area": readout_area,
+                "frame_combining": frame_combining,
+                "electron_counting": electron_counting,
+                "output_format": output_format,
             }
         )
         path = tmp_path / f"camera_{imsize}.h5"

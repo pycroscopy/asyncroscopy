@@ -13,7 +13,6 @@ devices:
   corrector: { module_name: asyncroscopy.instruments.electron_microscope.hardware.corrector }
   data:      { module_name: asyncroscopy.data.data }
   eds:       { module_name: asyncroscopy.instruments.electron_microscope.detectors.eds }
-  flucam:    { module_name: asyncroscopy.instruments.electron_microscope.detectors.flucam }
   scan:      { module_name: asyncroscopy.instruments.electron_microscope.hardware.scan }
   stage:
     class_name: AutoScriptSTAGE
