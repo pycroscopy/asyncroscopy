@@ -279,7 +279,15 @@ class ProcessManager:
             self._remove_state_file()
 
     def _kill_stale_pid(self, pid: int):
-        """Best-effort termination of orphan process IDs from a previous crash."""
+        """Best-effort termination of orphan process IDs from a previous crash.
+
+        Recorded PIDs are process-group leaders (start_process uses
+        start_new_session=True), so signaling the whole group is required:
+        a bare os.kill only reaches a wrapper like `uv run`, and once that
+        wrapper is SIGKILLed it has no chance to relay the signal to the
+        actual device-server child it spawned, leaving that child running
+        and still holding its Tango server-instance name.
+        """
         if os.name == "nt":
             subprocess.run(
                 ["taskkill", "/F", "/T", "/PID", str(pid)],
@@ -287,8 +295,13 @@ class ProcessManager:
             )
         else:
             try:
-                os.kill(pid, signal.SIGTERM)
+                pgid = os.getpgid(pid)
             except ProcessLookupError:
+                return
+
+            try:
+                os.killpg(pgid, signal.SIGTERM)
+            except (ProcessLookupError, PermissionError):
                 return
 
             # Brief poll to see if SIGTERM was honored
@@ -301,8 +314,8 @@ class ProcessManager:
                     return
 
             try:
-                os.kill(pid, signal.SIGKILL)
-            except ProcessLookupError:
+                os.killpg(pgid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
                 pass
 
     def _remove_state_file(self):

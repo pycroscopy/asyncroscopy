@@ -480,7 +480,18 @@ def print_summary(
 
 
 def main(argv: list[str] | None = None) -> int:
+    shutdown_requested = False
+
     def request_shutdown(_signum, _frame) -> None:
+        # A GUI's Stop button (or a wrapper like `uv run` forwarding its own
+        # copy of the same signal) can deliver SIGTERM more than once for a
+        # single stop request. Only the first should raise: re-raising while
+        # ProcessManager.shutdown_all() is already unwinding interrupts that
+        # cleanup mid-flight and can leave child device servers orphaned.
+        nonlocal shutdown_requested
+        if shutdown_requested:
+            return
+        shutdown_requested = True
         raise KeyboardInterrupt
 
     signal.signal(signal.SIGTERM, request_shutdown)
