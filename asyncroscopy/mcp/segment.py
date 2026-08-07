@@ -20,7 +20,7 @@ except ImportError:
 
 class SEGMENTATION(Device):
     model_size = device_property(dtype=str, default_value="facebook/sam2-hiera-large", doc="HuggingFace model ID for SAM 2")
-    points_per_side = attribute(dtype=int, access=AttrWriteType.READ_WRITE, doc="Grid density for automatic mask generation")
+    points_per_side = attribute(dtype=int, access=AttrWriteType.READ_WRITE, doc="Number of points SAM samples along each edge of the image.")
     iou_threshold = attribute(dtype=float, access=AttrWriteType.READ_WRITE, doc="IoU threshold for mask merging")
     stability_thresh = attribute(dtype=float, access=AttrWriteType.READ_WRITE, doc="Stability threshold for mask filtering")
     min_area_px = attribute(dtype=int, access=AttrWriteType.READ_WRITE, doc="Minimum area in pixels for valid masks")
@@ -28,7 +28,7 @@ class SEGMENTATION(Device):
     centroids = attribute(dtype=str, access=AttrWriteType.READ, doc="Centroids of segmented areas")
 
     def init_device(self) -> None:
-        """Initialize the SAM 2 segmentation device."""
+        """Initialize the SAM 2 segmentation device, set SAM 2 parameters and segmentation statistics."""
         Device.init_device(self)
         self._device = "cuda" if torch.cuda.is_available() else "cpu"
         self.set_state(tango.DevState.INIT)
@@ -157,7 +157,13 @@ class SEGMENTATION(Device):
 
     @command(dtype_in=str, dtype_out=str)
     def segment(self, image_path: str) -> str:
-        """Load an image from a file path and segment it."""
+        """Segment areas in microscope images using SAM 2.
+        
+        Input: file path to user image (png, tif, emd, etc.
+        Output: JSON list of area statistics including id, area in pixels,
+        equivalent diameter, circularity, and confidence score.
+        This also updates n_areas, centroids, and area_stats attributes."""
+        
         try:
             image_data = np.array(Image.open(image_path))
             prepared = self._prepare_image(image_data)
