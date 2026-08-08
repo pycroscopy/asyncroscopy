@@ -1,17 +1,12 @@
-"""
-# This python program has to be run in Gatan's DigitalMicrograph in background mode
-# Utilizes Hybrid Mode because python API is not complete.
-#
-# Author: Gerd Duscher, UTK
-# July 30th 2026 
-"""
 import DigitalMicrograph as DM
 import Pyro5.api
 import numpy as np
 
+
 @Pyro5.api.expose
 class EELSServer:
     def check_server(self):
+        print('check')
         return f"EELS Pyro5 1 server running."
 
     def check_data(self, length):
@@ -22,18 +17,19 @@ class EELSServer:
         return f"EELS {offset}"
     
     def initialize_eels(self):
-        """ initialize Gatan Image Filter to EELS mode if Image Filter is available""" 
         command = "number defaultFilterPresent=0.0 \n"
         command += "setpersistentnumbernote(\"EELSserver:DefaultValues:FilterPresent\",defaultFilterPresent)\n"
         command += "defaultFilterPresent = IFVerifyCommunication( ) \n"
         command += "setpersistentnumbernote(\"EELSserver:DefaultValues:FilterPresent\",defaultFilterPresent)\n"
+
         command += "if (defaultFilterPresent==1) (IFSetSpectroscopyMode( ))"
         DM.ExecuteScriptString( command )
-        globalTags = DM.GetPersistentTagGroup()
-        success, self.filterPpresent = globalTags.GetTagAsString("EELSserver:DefaultValues:FilterPresent")
+        self.globalTags = DM.GetPersistentTagGroup()
+        success, self.filter = self.globalTags.GetTagAsString("EELSserver:DefaultValues:FilterPresent")
+
 
     def get_eels_spectrum(self, exposure_time, number_of_frames=1):
-        """Get EELS spectrum with energy_scale offset and dispersion"""
+        
         command = f"image spectrum := EELSAcquireSpectrum({exposure_time}, {number_of_frames}, 1, 1, 2 )\n"
         command += "spectrum.ShowImage()"
         DM.ExecuteScriptString( command )
@@ -44,36 +40,33 @@ class EELSServer:
         DM.DeleteImage(myImage)
         return spectrum, offset, dispersion
 
+    
     def get_available_dispersions(self):    
-        """ Get available dispersion settrings with indices from Gatan Image Filter """
-        ommand = "number nDisp = IFGetNumberOfDispersions( ) \nstring message = \"\" \n"
-        command += "for ( number i = 0; i < nDisp; i++ )\n{message +=  i + \": \" + IFGetDispersion( i )+\", \" \n} \n"
+        command = "number nDisp = IFGetNumberOfDispersions( ) \nstring message = \"\" \n"
+        command += "for ( number i = 0; i < nDisp; i++ )\n{message +=  i + \": \" + IFGetDispersion( i )+\", \" \n} \n" 
         command += "setpersistentstringnote(\"EELSserver:DefaultValues:availableDispersions\", message)"
-
         DM.ExecuteScriptString( command )
         globalTags = DM.GetPersistentTagGroup()
         success, self.available_dispersions = globalTags.GetTagAsString("EELSserver:DefaultValues:availableDispersions")
         return self.available_dispersions
         
     def get_eels_dispersion(self):
-        """ Get current EELS dispersion setting"""
         command = "setpersistentnumbernote(\"EELSserver:DefaultValues:currentDiapersionIndex\",IFGetActiveDispersionIndex())\n"
-        command += "setpersistentstringnote(\"EELSserver:DefaultValues:currentDiapersion\",IFGetActiveDispersion())"
+        command += "setpersistentnumbernote(\"EELSserver:DefaultValues:currentDiapersion\",IFGetActiveDispersion())"
         DM.ExecuteScriptString( command )
         globalTags = DM.GetPersistentTagGroup()
         success, dispersion_index = globalTags.GetTagAsString("EELSserver:DefaultValues:currentDiapersionIndex")
         success, dispersion = globalTags.GetTagAsString("EELSserver:DefaultValues:currentDiapersion")
         return dispersion_index, dispersion
+        
     
     def set_eels_dispersion(self, dispersion_index):
-        """Set EELS dispersion through dispersion_index"""
         if isinstance(dispersion_index, int):
             command = f"IFSetActiveDispersionIndex( {dispersion_index} )\n"
             command += "IFWaitForFilter( )"
             DM.ExecuteScriptString( command )
-
+        
     def get_eels_aperture(self):
-        """Get EELS entrance aperture name and index"""
         command = "number aperture_index = IFGetActiveAperture()\n"
         command += "setpersistentnumbernote(\"EELSserver:DefaultValues:currentApertureIndex\",aperture_index)\n"
         command += "setpersistentstringnote(\"EELSserver:DefaultValues:currentAperture\",IFGetApertureLabel(aperture_index))"
@@ -82,28 +75,53 @@ class EELSServer:
         success, aperture = globalTags.GetTagAsString("EELSserver:DefaultValues:currentAperture")
         success, aperture_index = globalTags.GetTagAsString("EELSserver:DefaultValues:currentApertureIndex")
         return aperture
-
+        
     def set_eels_aperture(self, aperture_index):
-        """Set EELS entrance aperature with index"""
         if isinstance(aperture_index, int):
-                command = f"IFSetActiveAperture( {aperture_index} )\n"
-                command += "IFWaitForFilter( )"
-                DM.ExecuteScriptString(command)
-
+            command = f"IFSetActiveAperture( {aperture_index} )\n"
+            command += "IFWaitForFilter( )"
+            DM.ExecuteScriptString( command )
+    
     def get_available_apertures(self):
-        """ Get all available EELS entranc aperture names and indices """
         command = "number nAp = IFGetNumberOfApertures( ) \nstring message = \"\" \n"
-        command += "for ( number i = 0; i < nAp; i++ )\n{message +=  i + \": \" + IFGetApertureLabel( i )+\", \" \n} \n"
+        command += "for ( number i = 0; i < nAp; i++ )\n{message +=  i + \": \" + IFGetApertureLabel( i )+\", \" \n} \n" 
         command += "setpersistentstringnote(\"EELSserver:DefaultValues:availableApertures\", message)"
         DM.ExecuteScriptString( command )
+        globalTags = DM.GetPersistentTagGroup()
         success, self.available_apertures = globalTags.GetTagAsString("EELSserver:DefaultValues:availableApertures")
         return str(self.available_apertures)
+    
+        
+    def activateCamera(height=200):
+        cam = DM.GetActiveCamera()
+        cam.PrepareForAcquire()
+        height = int(height/2)
+        bin = 1
+        kproc = DM.GetCameraUnprocessedEnum()
+        kproc = DM.GetCameraGainNormalizedEnum()
 
+        preImg = cam.CreateImageForAcquire( bin, bin, kproc, 1024-height, 0, 1024+height, 2048)
+        
+        return preImg, cam, kproc
+
+    def acquireCamera(cam, preImg, kproc, exposure=0.1, height=200):
+        preImg.SetName( "Pre-created image container" )
+        preImg.ShowImage()
+        print(kproc)
+        height = int(height/2)
+        cam.AcquireInPlace( preImg, exposure, 1, 1, kproc, 1024-height, 0, 1024+height, 2048)
+        dmImgData = preImg.GetNumArray()
+        
+        return dmImgData.tolist()  # Convert numpy array to list for serialization
+
+    def close_camera(self, pre_created_image):
+        del pre_created_image
 
 def main():
     # Manually set the host IP and port here
     HOST_IP = "10.46.217.242"  # Or your network IP like "192.168.1.50"
     PORT = 9091
+   
 
     daemon = Pyro5.server.Daemon(host=HOST_IP, port=PORT)
 
