@@ -16,9 +16,9 @@ Real AutoScript image commands save the adorned object on disk and return the
 DATA/Tiled unique id for that saved acquisition.
 """
 
+import json
 import math
 import time
-import json
 
 import numpy as np
 import tango
@@ -35,7 +35,7 @@ try:
     import autoscript_tem_microscope_client
     from autoscript_tem_microscope_client import TemMicroscopeClient
     from autoscript_tem_microscope_client.enumerations import EdsDetectorType
-    from autoscript_tem_microscope_client.enumerations import CameraType, RegionCoordinateSystem, ExposureTimeType
+    from autoscript_tem_microscope_client.enumerations import CameraType, FixedReadoutArea, RegionCoordinateSystem, ExposureTimeType
     from autoscript_tem_microscope_client.structures import Region, Rectangle
     from autoscript_tem_microscope_client.structures import StemAcquisitionSettings, EdsAcquisitionSettings, RunOptiStemSettings, CameraAcquisitionSettings, StemDataSettings
 
@@ -179,7 +179,6 @@ class AutoScriptMicroscope(ElectronMicroscope):
             "stage": self.stage_device_address,
             "scan": self.scan_device_address,
             "camera": self.camera_device_address,
-            "flucam": self.flucam_device_address,
             "data": self.data_device_address,
         }
         for name, address in addresses.items():
@@ -270,15 +269,54 @@ class AutoScriptMicroscope(ElectronMicroscope):
         return save_acquisition(self, data_server, "stem_image", detector_list, adorned, output_format=output_format)
 
 
-    def _acquire_camera_image(self, imsize: int, exposure_time: float, detector: str, readout_area: str) -> str:
+    def _acquire_camera_image(
+        self,
+        imsize: int,
+        exposure_time: float,
+        detector: str,
+        readout_area: str,
+        frame_combining: int = 1,
+        electron_counting: bool = True,
+        output_format: str = ".h5",
+    ) -> str:
         """
-        Call AutoScript acquisition, save the adorned image, and return its DATA/Tiled key.
-        this is the advanced version
+        Call advanced AutoScript camera acquisition, save the adorned image,
+        and return its DATA/Tiled key.
         """
-        settings = CameraAcquisitionSettings(camera_detector=detector, size=imsize, exposure_time=exposure_time, fixed_readout_area=readout_area, frame_combining=1)
+        camera_detector = {
+            "Flucam": CameraType.FLUCAM,
+            "BM-Ceta": CameraType.BM_CETA,
+            "EF-Ceta": CameraType.EF_CETA,
+            "BM-Falcon": CameraType.BM_FALCON,
+            "EF-Falcon": CameraType.EF_FALCON,
+            "BM-Empad": CameraType.BM_EMPAD,
+            "SH-Empad": CameraType.SH_EMPAD,
+            "EF-CCD": CameraType.EF_CCD,
+            "EF-Empad": CameraType.EF_EMPAD,
+        }.get(detector, detector)
+        fixed_readout_area = {
+            "Full": FixedReadoutArea.FULL,
+            "Half": FixedReadoutArea.HALF,
+            "Quarter": FixedReadoutArea.QUARTER,
+        }.get(readout_area, readout_area)
+        settings = CameraAcquisitionSettings(
+            camera_detector=camera_detector,
+            size=imsize,
+            exposure_time=exposure_time,
+            fixed_readout_area=fixed_readout_area,
+            frame_combining=frame_combining,
+            electron_counting=electron_counting,
+        )
         adorned = self._microscope.acquisition.acquire_camera_image_advanced(settings)
         data_server = self._detector_proxies.get("data")
-        return save_acquisition(self, data_server, "camera_image", str(detector), adorned)
+        return save_acquisition(
+            self,
+            data_server,
+            "camera_image",
+            str(detector),
+            adorned,
+            output_format=output_format,
+        )
 
     def _acquire_scanned_data_advanced(self, imsize: int, dwell_time: float, detector: str, scan_region: list[float]) -> str:
         """
@@ -353,6 +391,14 @@ class AutoScriptMicroscope(ElectronMicroscope):
         """Get defocus in meters."""
         return float(self._microscope.optics.defocus)
     
+    def _set_screen(self, position: str)->None:
+        if position.lower() in ['in', 'insert', 'inserted']:
+            if self._microscope.detectors.screen.position == 'Retracted':
+                self._microscope.detectors.screen.insert()
+        elif position.lower() in ['out', 'retract', 'retracted']:
+             if self._microscope.detectors.screen.position == 'Inserted':
+                self._microscope.detectors.screen.retract()
+
 
     def _calibrate_screen_current(self) -> None:
         """ calibrate screen current with monchromator focus"""
@@ -452,22 +498,16 @@ class AutoScriptMicroscope(ElectronMicroscope):
 
         return json.dumps(status)
 
+    def _get_stage(self):
+        """Get the current stage position as [x, y, z, alpha, beta], with tilts in degrees."""
+        # set proxy attributes with current stage position
+        stage = self._detector_proxies["stage"]
+        return stage.position
+
     def _move_stage(self, position) -> None:
-        """Move stage to specified position [x, y, z, alpha, beta]."""
-        # TODO: add beta value check
-
-        x = float(position[0])
-        y = float(position[1])
-        z = float(position[2])
-        alpha = float(math.radians(position[3]))
-
-        if len(position) > 4 and position[4] is not None:
-            beta = float(math.radians(position[4]))
-        else:
-            beta = None
-
-        self._microscope.specimen.stage.absolute_move((x, y, z, alpha, beta))
-        # self._get_stage()  # link the proxy with real state
+        """Move stage to [x, y, z, alpha, beta], with x/y/z in meters and tilts in degrees."""
+        stage_proxy = self._detector_proxies.get("stage")
+        stage_proxy.position = position  # expects [x, y, z, alpha, beta] in meters and degrees
 
     def _auto_focus(self):
         """Perform autofocus routine C1A1"""

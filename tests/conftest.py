@@ -11,20 +11,45 @@ This avoids:
 - Flaky multi-context issues from spinning up multiple separate servers
 """
 
-import numpy as np
+import sys
+import asyncio
+
 import pytest
+from unittest.mock import MagicMock
+
+import numpy as np
 import tango
 from tango.test_context import MultiDeviceTestContext
 
 # Import device classes to test
 from asyncroscopy.instruments.electron_microscope.detectors.camera import CAMERA
 from asyncroscopy.instruments.electron_microscope.detectors.eds import EDS
-from asyncroscopy.instruments.electron_microscope.detectors.flucam import FLUCAM
 from asyncroscopy.instruments.electron_microscope.hardware.scan import SCAN
-from asyncroscopy.instruments.electron_microscope.hardware.stage import STAGE
+from asyncroscopy.instruments.electron_microscope.hardware.TestStage import TestStage
 from asyncroscopy.instruments.electron_microscope.digital_twin import DigitalTwin
 from asyncroscopy.instruments.electron_microscope.auto_script import AutoScriptMicroscope
 from asyncroscopy.data.data import DATA
+
+
+def _setup_llm_environment():
+    if sys.platform == "win32":
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
+    mock_core = MagicMock()
+    mock_core.tools.BaseTool = type("BaseTool", (), {})
+
+    sys.modules.update({
+        "langchain_core": mock_core,
+        "langchain_core.tools": mock_core.tools,
+        "langchain": MagicMock(),
+        "langchain.chat_models": MagicMock(),
+        "langchain_mcp_adapters": MagicMock(),
+        "langchain_mcp_adapters.client": MagicMock(),
+    })
+
+
+_setup_llm_environment()
+from asyncroscopy.mcp.llm import LLM
 
 
 class FakeAdornedImage:
@@ -78,16 +103,7 @@ def tango_ctx(data_save_dir):
             ],
         },
         {
-            "class": FLUCAM,
-            "devices": [
-                {
-                    "name": "asyncroscopy/flucam/default",
-                    "properties": {},
-                }
-            ],
-        },
-        {
-            "class": STAGE,
+            "class": TestStage,
             "devices": [
                 {
                     "name": "asyncroscopy/stage/default",
@@ -114,7 +130,6 @@ def tango_ctx(data_save_dir):
                         "eds_device_address": "asyncroscopy/eds/default",
                         "stage_device_address": "asyncroscopy/stage/default",
                         "camera_device_address": "asyncroscopy/camera/default",
-                        "flucam_device_address": "asyncroscopy/flucam/default",
                         "acquisition_save_directory": str(data_save_dir),
                     },
                 }
@@ -130,10 +145,23 @@ def tango_ctx(data_save_dir):
                         "testing_mode_bool": True,
                         "scan_device_address": "asyncroscopy/scan/default",
                         "camera_device_address": "asyncroscopy/camera/default",
-                        "flucam_device_address": "asyncroscopy/flucam/default",
                         "eds_device_address": "asyncroscopy/eds/default",
                         "stage_device_address": "asyncroscopy/stage/default",
                         "data_device_address": "asyncroscopy/data/default",
+                    },
+                }
+            ],
+        },
+        {
+            "class": LLM,
+            "devices": [
+                {
+                    "name": "asyncroscopy/llm/default",
+                    "properties": {
+                        "mcp_url": "http://localhost:8000",
+                        "model_name": "gpt-4o-mini",
+                        "model_provider": "openai",
+                        # "api_key": "<your_api_key_here>",
                     },
                 }
             ],
@@ -171,11 +199,6 @@ def camera_proxy(tango_ctx):
 
 
 @pytest.fixture(scope="session")
-def flucam_proxy(tango_ctx):
-    return tango.DeviceProxy(tango_ctx.get_device_access("asyncroscopy/flucam/default"))
-
-
-@pytest.fixture(scope="session")
 def stage_proxy(tango_ctx):
     return tango.DeviceProxy(tango_ctx.get_device_access("asyncroscopy/stage/default"))
 
@@ -189,7 +212,9 @@ def data_proxy(tango_ctx):
 def auto_script_proxy(tango_ctx):
     return tango.DeviceProxy(tango_ctx.get_device_access("asyncroscopy/autoscriptmicroscope/default"))
 
-
+@pytest.fixture(scope="session")
+def llm_proxy(tango_ctx):
+    return tango.DeviceProxy(tango_ctx.get_device_access("asyncroscopy/llm/default"))
 
 @pytest.fixture
 def patched_single_image(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -285,13 +310,25 @@ def patched_scanned_data_acquisition(monkeypatch: pytest.MonkeyPatch):
 def patched_camera_path_acquisition(monkeypatch: pytest.MonkeyPatch, tmp_path):
     calls = []
 
-    def fake_acquire(self, imsize: int, exposure_time: float, detector: str, readout_area: str):
+    def fake_acquire(
+        self,
+        imsize: int,
+        exposure_time: float,
+        detector: str,
+        readout_area: str,
+        frame_combining: int = 1,
+        electron_counting: bool = True,
+        output_format: str = ".h5",
+    ):
         calls.append(
             {
                 "imsize": imsize,
                 "exposure_time": exposure_time,
                 "detector": detector,
                 "readout_area": readout_area,
+                "frame_combining": frame_combining,
+                "electron_counting": electron_counting,
+                "output_format": output_format,
             }
         )
         path = tmp_path / f"camera_{imsize}.h5"

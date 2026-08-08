@@ -9,6 +9,7 @@ from autoscript_tem_microscope_client.enumerations import (
     CameraType,
     EdsDetectorType,
     ExposureTimeType,
+    FixedReadoutArea,
     RegionCoordinateSystem,
 )
 
@@ -16,6 +17,10 @@ from asyncroscopy.instruments.electron_microscope.auto_script import AutoScriptM
 
 
 class FakeDataServer:
+    def __init__(self, save_path=None) -> None:
+        if save_path is not None:
+            self.save_path = str(save_path)
+
     def register_path(self, path: str) -> str:
         return path
 
@@ -231,6 +236,10 @@ class TestAutoScriptMicroscope:
         camera_proxy.exposure_time = 0.25
         camera_proxy.imsize = 2048
         camera_proxy.readout_area = "Half"
+        camera_proxy.camera_detector = "BM-Ceta"
+        camera_proxy.frame_combining = 6
+        camera_proxy.electron_counting = False
+        camera_proxy.output_format = ".h5"
 
         saved_path = auto_script_proxy.acquire_camera_image()
 
@@ -241,20 +250,102 @@ class TestAutoScriptMicroscope:
                 "exposure_time": pytest.approx(0.25),
                 "detector": "BM-Ceta",
                 "readout_area": "Half",
+                "frame_combining": 6,
+                "electron_counting": False,
+                "output_format": ".h5",
             }
         ]
 
-    def test_flucam_settings_propagate_into_acquisition(
+    def test_camera_image_helper_builds_advanced_settings_and_saves_hdf5(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        class FakeImage:
+            data = np.array([[9, 8], [7, 6]], dtype=np.uint16)
+
+        class FakeAcquisition:
+            def __init__(self) -> None:
+                self.settings = None
+
+            def acquire_camera_image_advanced(self, settings):
+                self.settings = settings
+                return FakeImage()
+
+        acquisition = FakeAcquisition()
+        microscope = AutoScriptMicroscope.__new__(AutoScriptMicroscope)
+        microscope._microscope = types.SimpleNamespace(acquisition=acquisition)
+        microscope._detector_proxies = {"data": FakeDataServer()}
+
+        def fake_new_path(
+            device, acquisition_type: str, detector: str, data_server=None, extension="h5"
+        ):
+            return tmp_path / f"{acquisition_type}_{detector}.{extension}"
+
+        monkeypatch.setattr(
+            "asyncroscopy.data.data_writer.acquisition_filename", fake_new_path
+        )
+
+        result = AutoScriptMicroscope._acquire_camera_image(
+            microscope,
+            imsize=1024,
+            exposure_time=0.5,
+            detector="BM-Ceta",
+            readout_area="Half",
+            frame_combining=6,
+            electron_counting=False,
+        )
+
+        settings = acquisition.settings
+        assert settings.camera_detector == CameraType.BM_CETA
+        assert settings.size == 1024
+        assert settings.exposure_time == pytest.approx(0.5)
+        assert settings.fixed_readout_area == FixedReadoutArea.HALF
+        assert settings.frame_combining == 6
+        assert settings.electron_counting is False
+        with h5py.File(result, "r") as h5:
+            assert h5["image"][()].tolist() == [[9, 8], [7, 6]]
+            assert h5["image"].attrs["acquisition_type"] == "camera_image"
+            assert h5["image"].attrs["detector"] == "BM-Ceta"
+
+    def test_camera_image_helper_honors_tiff_output(self, tmp_path) -> None:
+        class FakeImage:
+            data = np.array([[1, 2], [3, 4]], dtype=np.uint16)
+
+        class FakeAcquisition:
+            def acquire_camera_image_advanced(self, settings):
+                return FakeImage()
+
+        microscope = AutoScriptMicroscope.__new__(AutoScriptMicroscope)
+        microscope._microscope = types.SimpleNamespace(
+            acquisition=FakeAcquisition()
+        )
+        microscope._detector_proxies = {"data": FakeDataServer(tmp_path)}
+
+        stem = AutoScriptMicroscope._acquire_camera_image(
+            microscope,
+            imsize=512,
+            exposure_time=0.1,
+            detector="BM-Ceta",
+            readout_area="Full",
+            output_format=".tiff",
+        )
+
+        assert (tmp_path / f"{stem}_BM-Ceta.tiff").exists()
+
+    def test_camera_device_can_select_flucam(
         self,
         auto_script_proxy: tango.DeviceProxy,
-        flucam_proxy: tango.DeviceProxy,
+        camera_proxy: tango.DeviceProxy,
         patched_camera_path_acquisition: list[dict],
     ) -> None:
-        flucam_proxy.exposure_time = 0.5
-        flucam_proxy.imsize = 1024
-        flucam_proxy.readout_area = "Full"
+        camera_proxy.camera_detector = "Flucam"
+        camera_proxy.exposure_time = 0.5
+        camera_proxy.imsize = 1024
+        camera_proxy.readout_area = "Full"
+        camera_proxy.frame_combining = 1
+        camera_proxy.electron_counting = True
+        camera_proxy.output_format = ".h5"
 
-        saved_path = auto_script_proxy.acquire_flucam_image()
+        saved_path = auto_script_proxy.acquire_camera_image()
 
         assert Path(saved_path).read_bytes() == b"fake-camera-h5"
         assert patched_camera_path_acquisition == [
@@ -263,6 +354,9 @@ class TestAutoScriptMicroscope:
                 "exposure_time": pytest.approx(0.5),
                 "detector": "Flucam",
                 "readout_area": "Full",
+                "frame_combining": 1,
+                "electron_counting": True,
+                "output_format": ".h5",
             }
         ]
 

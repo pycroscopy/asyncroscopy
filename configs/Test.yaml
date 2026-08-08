@@ -1,30 +1,26 @@
 instrument:
   class_name: DigitalTwin
   file: asyncroscopy/instruments/electron_microscope/digital_twin.py
-  description: "Digital Twin Simulation Environment"
+  description: "Test Digital Twin"
   timeout_seconds: 120
 
 devices:
-  eels:
-    module_name: asyncroscopy.instruments.electron_microscope.detectors.eels_gatan
-    properties:
-      data_device_address: asyncroscopy/data/default
-  data:
-    module_name: asyncroscopy.data.data
   camera:
     module_name: asyncroscopy.instruments.electron_microscope.detectors.camera
+  data:
+    module_name: asyncroscopy.data.data
   eds:
     module_name: asyncroscopy.instruments.electron_microscope.detectors.eds
-  flucam:
-    module_name: asyncroscopy.instruments.electron_microscope.detectors.flucam
   scan:
     module_name: asyncroscopy.instruments.electron_microscope.hardware.scan
   stage:
-    module_name: asyncroscopy.instruments.electron_microscope.hardware.stage
-    
+    class_name: TestStage
+    module_name: asyncroscopy.instruments.electron_microscope.hardware.TestStage
+
 tango:
   host: localhost
   port: 9094
+  reset_database_file: false
 
 tiled:
   host: localhost

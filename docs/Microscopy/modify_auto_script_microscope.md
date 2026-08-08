@@ -22,6 +22,9 @@ If you're editing this class, you're usually doing one of these:
    pull from `self._microscope` and must return `nan`/`False` when it is `None`
    (testing mode) — guard every such read. `register_stage` is the matching
    command: it pushes the live stage position onto the STAGE child device.
+   The public stage vector is `[x, y, z, alpha, beta]`, with x/y/z in meters
+   and alpha/beta in degrees. Convert tilts to radians only when sending values
+   to AutoScript.
 
 2. **Updating an attribute read/write method**
    (Control how a value is validated, stored, or synced with AutoScript.)
