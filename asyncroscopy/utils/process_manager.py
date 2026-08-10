@@ -288,8 +288,13 @@ class ProcessManager:
             )
         else:
             try:
-                os.kill(pid, signal.SIGTERM)
+                pgid = os.getpgid(pid)
             except ProcessLookupError:
+                return
+
+            try:
+                os.killpg(pgid, signal.SIGTERM)
+            except (ProcessLookupError, PermissionError):
                 return
 
             # Brief poll to see if SIGTERM was honored
@@ -302,8 +307,8 @@ class ProcessManager:
                     return
 
             try:
-                os.kill(pid, signal.SIGKILL)
-            except ProcessLookupError:
+                os.killpg(pgid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
                 pass
 
     def _remove_state_file(self):

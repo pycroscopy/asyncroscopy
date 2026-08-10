@@ -486,12 +486,20 @@ def print_summary(
 
 
 def main(argv: list[str] | None = None) -> int:
+    shutdown_requested = False
+
     def request_shutdown(_signum, _frame) -> None:
+        nonlocal shutdown_requested
+        if shutdown_requested:
+            return
+        shutdown_requested = True
         raise KeyboardInterrupt
 
     signal.signal(signal.SIGTERM, request_shutdown)
     if hasattr(signal, "SIGHUP"):
         signal.signal(signal.SIGHUP, request_shutdown)
+    if hasattr(signal, "SIGBREAK"):
+        signal.signal(signal.SIGBREAK, request_shutdown)
 
     args = parse_args(argv)
     config_path = args.yaml or DEFAULT_CONFIG_PATH

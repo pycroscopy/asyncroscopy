@@ -7,6 +7,7 @@ import argparse
 import subprocess
 import json
 import os
+import signal
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -109,6 +110,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> int:
+    shutdown_requested = False
+
+    def request_shutdown(_signum, _frame) -> None:
+        nonlocal shutdown_requested
+        if shutdown_requested:
+            return
+        shutdown_requested = True
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, request_shutdown)
+    if hasattr(signal, "SIGHUP"):
+        signal.signal(signal.SIGHUP, request_shutdown)
+    if hasattr(signal, "SIGBREAK"):
+        signal.signal(signal.SIGBREAK, request_shutdown)
+
     args = parse_args(argv)
     try:
         config = load_config(args.yaml)

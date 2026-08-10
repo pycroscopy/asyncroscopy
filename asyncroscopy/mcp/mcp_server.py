@@ -449,6 +449,8 @@ class MCPServer:
                         print(f"Failed to wrap {dev_class}.{command_name}: {e}")
                         traceback.print_exc()
 
+        print(f"MCP ready: {len(native_tools) + num_device_tools} tool(s) registered", flush=True)
+
         if print_summary and self.verbose:
             print(f"\nRegistered {len(native_tools)} native tool(s)")
             print(f"Registered {num_device_tools} Tango device command tool(s)")
