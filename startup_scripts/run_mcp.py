@@ -7,7 +7,6 @@ import argparse
 import subprocess
 import json
 import os
-import signal
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,7 +17,7 @@ PROJECT_DIR = Path(__file__).resolve().parents[1]
 if str(PROJECT_DIR) not in sys.path:
     sys.path.insert(0, str(PROJECT_DIR))
 
-from asyncroscopy.utils.process_manager import ManagedProcess, ProcessManager
+from asyncroscopy.utils.process_manager import ManagedProcess, ProcessManager, install_shutdown_signal_handler
 
 DEFAULT_CONFIG_PATH = PROJECT_DIR / 'configs' / 'mcp.yaml'
 
@@ -110,20 +109,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> int:
-    shutdown_requested = False
-
-    def request_shutdown(_signum, _frame) -> None:
-        nonlocal shutdown_requested
-        if shutdown_requested:
-            return
-        shutdown_requested = True
-        raise KeyboardInterrupt
-
-    signal.signal(signal.SIGTERM, request_shutdown)
-    if hasattr(signal, "SIGHUP"):
-        signal.signal(signal.SIGHUP, request_shutdown)
-    if hasattr(signal, "SIGBREAK"):
-        signal.signal(signal.SIGBREAK, request_shutdown)
+    install_shutdown_signal_handler()
 
     args = parse_args(argv)
     try:

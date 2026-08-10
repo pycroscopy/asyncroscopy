@@ -33,7 +33,7 @@ from startup_guis.qt_compat import (  # noqa: E402
     QWidget,
     app_exec,
 )
-from startup_guis.shared import BODY_FONT, CONFIG_DIR, DIGITAL_TWIN_HOST, GENERATED_CONFIG_DIR, SPECTRA300_HOST, TEXT_FONT, TITLE_FONT, CheckBox, CollapsibleSection, HostToggle, ManagedCommand, action_button, append_terminal_text, apply_theme, configure_splitter, configure_terminal, load_yaml, scrollable, section_label, set_tool_count_badge, tool_count_badge, write_yaml, yaml_text  # noqa: E402
+from startup_guis.shared import BODY_FONT, CONFIG_DIR, GENERATED_CONFIG_DIR, TEXT_FONT, TITLE_FONT, CheckBox, CollapsibleSection, InstrumentPicker, ManagedCommand, action_button, append_terminal_text, apply_theme, configure_splitter, configure_terminal, load_yaml, resolve_default_tango, scrollable, section_label, set_tool_count_badge, tool_count_badge, write_yaml, yaml_text  # noqa: E402
 
 
 DEFAULT_CONFIG_PATH = CONFIG_DIR / 'mcp.yaml'
@@ -64,11 +64,15 @@ class McpGui(QMainWindow):
         self.setWindowTitle('Asyncroscopy MCP Startup')
         self.resize(1280, 960)
         self.setMinimumSize(880, 560)
-        self.command = ManagedCommand(self.enqueue_output, self.process_done)
+        self.command = ManagedCommand(self.enqueue_output, self.process_done, name='mcp_gui')
         self.default_config = load_yaml(DEFAULT_CONFIG_PATH)
         self.inputs: dict[str, QLineEdit | QComboBox | QCheckBox] = {}
         self.build()
         self.refresh_yaml()
+
+    def closeEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        self.command.shutdown()
+        super().closeEvent(event)
 
     def build(self) -> None:
         apply_theme(self)
@@ -112,17 +116,18 @@ class McpGui(QMainWindow):
         self.tool_badge = tool_count_badge()
         title_row.addWidget(self.tool_badge)
         title_row.addStretch()
-        self.host_toggle = HostToggle(self.apply_host_preset)
-        title_row.addWidget(self.host_toggle)
+        self.instrument_picker = InstrumentPicker(self.apply_instrument_preset)
+        title_row.addWidget(self.instrument_picker)
         layout.addLayout(title_row)
 
-        tango = self.default_config['tango']
+        tango_host, tango_port = resolve_default_tango(self.default_config)
         database = self.section('Database', expanded=False)
-        self.add_row(database, 'Tango host', self.line_input('tango_host', tango.get('host', 'localhost')))
-        self.inputs['tango_host'].textChanged.connect(self.sync_host_toggle)
-        self.add_row(database, 'Tango port', self.line_input('tango_port', tango.get('port', 9094)))
+        self.add_row(database, 'Tango host', self.line_input('tango_host', tango_host))
+        self.inputs['tango_host'].textChanged.connect(self.sync_instrument_picker)
+        self.add_row(database, 'Tango port', self.line_input('tango_port', tango_port))
+        self.inputs['tango_port'].textChanged.connect(self.sync_instrument_picker)
         layout.addWidget(database)
-        self.sync_host_toggle()
+        self.sync_instrument_picker()
 
         mcp = self.default_config['mcp']
         mcp_server = self.section('MCP server', expanded=False)
@@ -212,14 +217,19 @@ class McpGui(QMainWindow):
         self.inputs[key] = widget
         return widget
 
-    def apply_host_preset(self, host: str) -> None:
+    def apply_instrument_preset(self, host: str, port: int) -> None:
         self.inputs['tango_host'].setText(host)
+        self.inputs['tango_port'].setText(str(port))
 
-    def sync_host_toggle(self) -> None:
-        """Reflect whether the Tango host field currently matches a known preset."""
+    def sync_instrument_picker(self) -> None:
+        """Reflect whether the Tango host/port fields currently match a known instrument."""
         host = self.inputs['tango_host'].text()
-        key = {DIGITAL_TWIN_HOST: 'digital_twin', SPECTRA300_HOST: 'spectra300'}.get(host)
-        self.host_toggle.set_active(key)
+        try:
+            port = int(self.inputs['tango_port'].text())
+        except ValueError:
+            self.instrument_picker.set_active('', -1)
+            return
+        self.instrument_picker.set_active(host, port)
 
     def current_config(self) -> dict:
         values = {

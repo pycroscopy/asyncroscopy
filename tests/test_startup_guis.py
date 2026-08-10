@@ -1,4 +1,6 @@
-from startup_guis import mcp_gui, server_gui
+import time
+
+from startup_guis import mcp_gui, server_gui, shared
 
 
 def test_server_gui_builds_server_yaml():
@@ -128,3 +130,76 @@ def test_mcp_gui_builds_mcp_yaml():
     assert config['mcp']['http_host'] == '0.0.0.0'
     assert config['mcp']['blocked_classes'] == ['DataBase', 'DServer']
     assert config['mcp']['blocked_functions'] == {'*': ['Init', 'Kill']}
+
+
+def test_discover_instrument_configs_finds_any_instrument_yaml(tmp_path, monkeypatch):
+    monkeypatch.setattr(shared, 'CONFIG_DIR', tmp_path)
+    (tmp_path / 'jeol.yaml').write_text('instrument:\n  description: JEOL JEM-F200\ntango:\n  host: 10.0.0.5\n  port: 9094\n')
+    (tmp_path / 'mcp_only.yaml').write_text('tango:\n  host: 10.0.0.9\n  port: 9094\nmcp:\n  name: x\n')
+
+    found = shared.discover_instrument_configs()
+
+    assert found == [('JEOL JEM-F200', '10.0.0.5', 9094)]
+
+
+def test_discover_instrument_configs_falls_back_to_filename_without_description(tmp_path, monkeypatch):
+    monkeypatch.setattr(shared, 'CONFIG_DIR', tmp_path)
+    (tmp_path / 'unlabeled.yaml').write_text('instrument:\n  class_name: Foo\ntango:\n  host: localhost\n  port: 9094\n')
+
+    found = shared.discover_instrument_configs()
+
+    assert found == [('unlabeled', 'localhost', 9094)]
+
+
+def test_resolve_default_tango_prefers_last_started_server_config(tmp_path, monkeypatch):
+    monkeypatch.setattr(shared, 'GENERATED_CONFIG_DIR', tmp_path)
+    (tmp_path / 'server_gui.yaml').write_text('tango:\n  host: 192.168.1.50\n  port: 9094\n')
+
+    host, port = shared.resolve_default_tango({'tango': {'host': 'stale-host', 'port': 1234}})
+
+    assert (host, port) == ('192.168.1.50', 9094)
+
+
+def test_resolve_default_tango_falls_back_when_server_gui_never_ran(tmp_path, monkeypatch):
+    monkeypatch.setattr(shared, 'GENERATED_CONFIG_DIR', tmp_path)
+
+    host, port = shared.resolve_default_tango({'tango': {'host': 'fallback-host', 'port': 4321}})
+
+    assert (host, port) == ('fallback-host', 4321)
+
+
+def test_managed_command_stop_delegates_to_process_manager(tmp_path, monkeypatch):
+    monkeypatch.setattr(shared.ProcessManager, 'cleanup_stale_state', lambda self: None)
+    output_lines = []
+    done_calls = []
+    command = shared.ManagedCommand(output_lines.append, done_calls.append, name='test_gui')
+    command._manager.state_dir = tmp_path
+    command._manager.state_file = tmp_path / 'test_gui.json'
+
+    stopped = []
+    monkeypatch.setattr(command._manager, 'stop_process', stopped.append)
+
+    class FakeManaged:
+        running = True
+
+    command._managed = FakeManaged()
+    command.stop()
+
+    deadline = time.time() + 1
+    while not stopped and time.time() < deadline:
+        time.sleep(0.01)
+
+    assert stopped == [command._managed]
+    assert 'Stop requested.\n' in output_lines
+
+
+def test_managed_command_shutdown_delegates_to_process_manager(monkeypatch):
+    monkeypatch.setattr(shared.ProcessManager, 'cleanup_stale_state', lambda self: None)
+    command = shared.ManagedCommand(lambda _line: None, lambda _code: None, name='test_gui')
+
+    calls = []
+    monkeypatch.setattr(command._manager, 'shutdown_all', lambda: calls.append(True))
+
+    command.shutdown()
+
+    assert calls == [True]
