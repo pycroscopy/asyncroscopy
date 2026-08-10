@@ -7,6 +7,7 @@ import time
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable
 import threading
 
 TANGO_DATABASE_FILES = ("tango_database.db", "Tango_database.db")
@@ -69,7 +70,7 @@ class ProcessManager:
         self.history: deque[ManagedProcess] = deque(maxlen=1000)
 
     def __enter__(self):
-        self._cleanup_stale_state()
+        self.cleanup_stale_state()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -82,9 +83,14 @@ class ProcessManager:
         command: list[str],
         env: dict[str, str] | None = None,
         cwd: Path | str | None = PROJECT_DIR,
+        on_output: Callable[[str], None] | None = None,
         **kwargs,
     ) -> ManagedProcess:
-        """Launches a child process, sets group/session execution, and records state."""
+        """Launches a child process, sets group/session execution, and records state.
+
+        `on_output`, if given, is called with each stdout/stderr line as it arrives,
+        in addition to it being buffered onto the returned ManagedProcess.
+        """
         popen_kwargs: dict = {"env": env, "cwd": cwd, "stdout": subprocess.PIPE, "stderr": subprocess.PIPE}
         popen_kwargs.update(kwargs)
 
@@ -107,20 +113,23 @@ class ProcessManager:
             stderr_lines=deque(maxlen=self.max_output_lines),
         )
         self.active_processes.append(managed)
-        self.history.append(managed) 
-        self._drain(proc.stdout, managed.stdout_lines)
-        self._drain(proc.stderr, managed.stderr_lines)
+        self.history.append(managed)
+        self._drain(proc.stdout, managed.stdout_lines, on_output)
+        self._drain(proc.stderr, managed.stderr_lines, on_output)
         self.save()
         return managed
 
     @staticmethod
-    def _drain(stream, buf: deque) -> None:
+    def _drain(stream, buf: deque, on_line: Callable[[str], None] | None = None) -> None:
         """Continuously reads lines and saves them into a queue, preventing the pipe from getting blocked"""
         if stream is None:
             return
         def _read() -> None:
             for line in iter(stream.readline, b""):
-                buf.append(line.decode(errors="replace").rstrip())
+                text = line.decode(errors="replace").rstrip()
+                buf.append(text)
+                if on_line is not None:
+                    on_line(text)
             stream.close()
         threading.Thread(target=_read, daemon=True).start()
 
@@ -261,7 +270,7 @@ class ProcessManager:
                     proc.kill()
                 proc.wait()
 
-    def _cleanup_stale_state(self):
+    def cleanup_stale_state(self):
         """Reads state file on startup, terminates surviving PIDs, and deletes the file."""
         if not self.state_file.exists():
             return
@@ -383,3 +392,28 @@ class ProcessManager:
                 self._kill_stale_pid(int(pid_str.strip()))
                 stopped += 1
         return stopped
+
+
+def install_shutdown_signal_handler() -> None:
+    """Route SIGTERM/SIGHUP/SIGBREAK to a single KeyboardInterrupt.
+
+    Startup scripts run their real work inside `with ProcessManager() as manager:`
+    and rely on KeyboardInterrupt (normally just Ctrl+C) to unwind that block so
+    `manager.shutdown_all()` runs. This makes an external stop request (e.g. a GUI
+    killing the launcher's process group) unwind the same way, instead of the
+    process dying immediately and leaving its managed children behind.
+    """
+    shutdown_requested = False
+
+    def request_shutdown(_signum, _frame) -> None:
+        nonlocal shutdown_requested
+        if shutdown_requested:
+            return
+        shutdown_requested = True
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, request_shutdown)
+    if hasattr(signal, "SIGHUP"):
+        signal.signal(signal.SIGHUP, request_shutdown)
+    if hasattr(signal, "SIGBREAK"):
+        signal.signal(signal.SIGBREAK, request_shutdown)

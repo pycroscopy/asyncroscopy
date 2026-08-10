@@ -123,12 +123,16 @@ class ServerGui(QMainWindow):
         self.setWindowTitle('Asyncroscopy Server Startup')
         self.resize(1020, 960)
         self.setMinimumSize(720, 560)
-        self.command = ManagedCommand(self.enqueue_output, self.process_done) 
-        self.default_config = load_yaml(DEFAULT_CONFIG_PATH) 
-        self.device_config = self.default_config.get('devices', {}) 
-        self.inputs: dict[str, QLineEdit | QComboBox | QCheckBox] = {} 
-        self.device_checks: dict[str, QCheckBox] = {} 
-        self.build() 
+        self.command = ManagedCommand(self.enqueue_output, self.process_done, name='server_gui')
+        self.default_config = load_yaml(DEFAULT_CONFIG_PATH)
+        self.device_config = self.default_config.get('devices', {})
+        self.inputs: dict[str, QLineEdit | QComboBox | QCheckBox] = {}
+        self.device_checks: dict[str, QCheckBox] = {}
+        self.build()
+
+    def closeEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        self.command.shutdown()
+        super().closeEvent(event)
 
     def build(self) -> None:
         apply_theme(self)

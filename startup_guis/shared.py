@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 import re
-import signal
 import subprocess
 import sys
 import threading
@@ -10,6 +9,12 @@ from pathlib import Path
 from typing import Callable
 
 import yaml
+
+PROJECT_DIR = Path(__file__).resolve().parents[1]
+if str(PROJECT_DIR) not in sys.path:
+    sys.path.insert(0, str(PROJECT_DIR))
+
+from asyncroscopy.utils.process_manager import ManagedProcess, ProcessManager  # noqa: E402
 
 from startup_guis.qt_compat import (
     FIELDS_STAY_AT_SIZE_HINT,
@@ -27,6 +32,7 @@ from startup_guis.qt_compat import (
     QApplication,
     QCheckBox,
     QColor,
+    QComboBox,
     QFont,
     QFormLayout,
     QHBoxLayout,
@@ -49,7 +55,6 @@ from startup_guis.qt_compat import (
 )
 
 
-PROJECT_DIR = Path(__file__).resolve().parents[1]
 CONFIG_DIR = PROJECT_DIR / 'configs'
 GENERATED_CONFIG_DIR = PROJECT_DIR / 'outputs' / 'startup_configs'
 
@@ -150,6 +155,24 @@ def write_yaml(path: Path, config: dict) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(yaml_text(config), encoding='utf-8')
     return path
+
+
+def resolve_default_tango(fallback: dict) -> tuple[str, int]:
+    """Tango host/port to default a startup GUI to.
+
+    Prefers whatever Server GUI last actually launched (`outputs/startup_configs/server_gui.yaml`),
+    since that's the Tango DB that's genuinely running, over a separately hand-maintained config.
+    """
+    server_gui_path = GENERATED_CONFIG_DIR / 'server_gui.yaml'
+    if server_gui_path.exists():
+        try:
+            tango = load_yaml(server_gui_path).get('tango', {})
+        except (OSError, yaml.YAMLError):
+            tango = {}
+        if 'host' in tango and 'port' in tango:
+            return str(tango['host']), int(tango['port'])
+    tango = fallback.get('tango', {})
+    return str(tango.get('host', 'localhost')), int(tango.get('port', 9094))
 
 
 def app_stylesheet() -> str:
@@ -347,65 +370,60 @@ def set_tool_count_badge(label: QLabel, count: int | None) -> None:
     )
 
 
-DIGITAL_TWIN_HOST = 'localhost'
-SPECTRA300_HOST = '10.46.217.241'
-HOST_PRESETS = {'digital_twin': DIGITAL_TWIN_HOST, 'spectra300': SPECTRA300_HOST}
+def discover_instrument_configs() -> list[tuple[str, str, int]]:
+    """(label, tango_host, tango_port) for each configs/*.yaml that defines an instrument.
+
+    Any server-style config (has both `instrument` and `tango` sections) counts, so
+    adding a new instrument is just dropping a new YAML file in configs/ - no code change.
+    """
+    found = []
+    for path in sorted(CONFIG_DIR.glob('*.yaml')):
+        try:
+            data = load_yaml(path)
+        except (OSError, yaml.YAMLError):
+            continue
+        if not isinstance(data, dict) or 'instrument' not in data:
+            continue
+        tango = data.get('tango')
+        if not isinstance(tango, dict) or 'host' not in tango or 'port' not in tango:
+            continue
+        label = (data.get('instrument') or {}).get('description') or path.stem
+        found.append((label, str(tango['host']), int(tango['port'])))
+    return found
 
 
-class HostToggle(QWidget):
-    """A Digital Twin / Spectra300 segmented switch that sets host field(s) to a known-good preset."""
+class InstrumentPicker(QWidget):
+    """A dropdown of known instruments (configs/*.yaml with an `instrument` block) that applies the selected one's Tango host/port."""
 
-    def __init__(self, on_change: Callable[[str], None], parent=None):
+    def __init__(self, on_change: Callable[[str, int], None], parent=None):
         super().__init__(parent)
         self._on_change = on_change
-        self._buttons: dict[str, QPushButton] = {}
+        self._instruments = discover_instrument_configs()
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-        for key, label in (('digital_twin', 'Digital Twin'), ('spectra300', 'Spectra300')):
-            button = QPushButton(label)
-            button.setCheckable(True)
-            button.setFont(_font('LABEL_FONT'))
-            button.setCursor(POINTING_HAND_CURSOR)
-            button.clicked.connect(lambda _checked, k=key: self._select(k, notify=True))
-            layout.addWidget(button)
-            self._buttons[key] = button
-        self.set_active(None)
+        self.combo = QComboBox()
+        self.combo.addItem('Instrument preset…')
+        for label, _host, _port in self._instruments:
+            self.combo.addItem(label)
+        self.combo.currentIndexChanged.connect(self._select)
+        layout.addWidget(self.combo)
 
-    def _select(self, key: str, notify: bool) -> None:
-        for button_key, button in self._buttons.items():
-            button.setChecked(button_key == key)
-        self._restyle()
-        if notify:
-            self._on_change(HOST_PRESETS[key])
+    def _select(self, index: int) -> None:
+        if index <= 0:
+            return
+        _label, host, port = self._instruments[index - 1]
+        self._on_change(host, port)
 
-    def set_active(self, key: str | None) -> None:
-        """Reflect which preset (if any) a host field currently matches, without firing on_change."""
-        self._select(key, notify=False)
-
-    def _restyle(self) -> None:
-        for key, button in self._buttons.items():
-            checked = button.isChecked()
-            first = key == 'digital_twin'
-            radius = '6px 0px 0px 6px' if first else '0px 6px 6px 0px'
-            border_fix = '' if first else 'border-left: none;'
-            if checked:
-                button.setStyleSheet(
-                    'QPushButton {'
-                    f'background: {COLORS["accent"]}; color: #ffffff; border: 1px solid {COLORS["accent"]};'
-                    f'{border_fix} border-radius: {radius}; padding: 4px 12px;'
-                    '}'
-                )
-            else:
-                button.setStyleSheet(
-                    'QPushButton {'
-                    f'background: {COLORS["panel"]}; color: {COLORS["text_dim"]}; border: 1px solid {COLORS["border"]};'
-                    f'{border_fix} border-radius: {radius}; padding: 4px 12px;'
-                    '}'
-                    'QPushButton:hover {'
-                    f'background: {COLORS["panel_hover"]};'
-                    '}'
-                )
+    def set_active(self, host: str, port: int) -> None:
+        """Reflect which known instrument (if any) currently matches host/port, without firing on_change."""
+        self.combo.blockSignals(True)
+        for row, (_label, preset_host, preset_port) in enumerate(self._instruments, start=1):
+            if preset_host == host and preset_port == port:
+                self.combo.setCurrentIndex(row)
+                self.combo.blockSignals(False)
+                return
+        self.combo.setCurrentIndex(0)
+        self.combo.blockSignals(False)
 
 
 def configure_terminal(widget: QTextEdit) -> None:
@@ -525,80 +543,60 @@ def append_terminal_text(widget: QTextEdit, text: str) -> None:
 
 
 class ManagedCommand(QObject):
+    """Launches and stops a GUI-driven startup command through `ProcessManager`.
+
+    Delegating to `ProcessManager` (instead of a bare `subprocess.Popen`) means Stop
+    gets the same guarantees the CLI launchers get: a SIGTERM/killpg to the whole
+    process group, a bounded wait, and an escalation to SIGKILL if the process (or
+    something it spawned) is still alive afterwards - so the launched `uv run ...`
+    tree can't outlive the button press.
+    """
+
     output_ready = pyqtSignal(str)
     done = pyqtSignal(object)
 
-    def __init__(self, output: OutputCallback, done: DoneCallback):
+    def __init__(self, output: OutputCallback, done: DoneCallback, name: str = 'startup_gui'):
         super().__init__()
         self.output_ready.connect(output)
         self.done.connect(done)
-        self.process: subprocess.Popen[str] | None = None
+        self._manager = ProcessManager(name=name)
+        self._manager.cleanup_stale_state()
+        self._managed: ManagedProcess | None = None
 
     @property
     def running(self) -> bool:
-        return self.process is not None and self.process.poll() is None
+        return self._managed is not None and self._managed.running
 
     def start(self, command: list[str]) -> None:
         if self.running:
             self.output_ready.emit('A process is already running.\n')
             return
         env = {**os.environ, 'PYTHONUNBUFFERED': '1'}
-        popen_kwargs = {'cwd': PROJECT_DIR, 'env': env, 'stdout': subprocess.PIPE, 'stderr': subprocess.STDOUT, 'text': True, 'bufsize': 1}
-        if os.name == 'nt':
-            popen_kwargs['creationflags'] = getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0)
-        else:
-            popen_kwargs['start_new_session'] = True
         self.output_ready.emit(f'$ {" ".join(command)}\n')
-        self.process = subprocess.Popen(command, **popen_kwargs)
-        threading.Thread(target=self._read_output, daemon=True).start()
+        self._managed = self._manager.start_process(
+            key='gui_process',
+            label=' '.join(command),
+            command=command,
+            env=env,
+            stderr=subprocess.STDOUT,
+            on_output=self.output_ready.emit,
+        )
+        threading.Thread(target=self._await_exit, args=(self._managed,), daemon=True).start()
 
     def stop(self) -> None:
         if not self.running:
             self.output_ready.emit('No process is running.\n')
             return
-        assert self.process is not None
-        if os.name == 'nt':
-            try:
-                self.process.send_signal(signal.CTRL_BREAK_EVENT)
-            except (OSError, ValueError):
-                self.process.terminate()
-            threading.Thread(target=self._ensure_stopped, args=(self.process,), daemon=True).start()
-        else:
-            try:
-                os.killpg(self.process.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                return
-            except OSError:
-                self.process.terminate()
         self.output_ready.emit('Stop requested.\n')
+        threading.Thread(target=self._manager.stop_process, args=(self._managed,), daemon=True).start()
 
-    @staticmethod
-    def _ensure_stopped(process: subprocess.Popen) -> None:
-        try:
-            process.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            subprocess.run(
-                ['taskkill', '/F', '/T', '/PID', str(process.pid)],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000),
-            )
+    def shutdown(self) -> None:
+        """Force-stop the managed process; call this from the window's close handler."""
+        self._manager.shutdown_all()
 
-    def _read_output(self) -> None:
-        assert self.process is not None
-        if self.process.stdout is not None:
-            while True:
-                line = self.process.stdout.readline()
-                if line:
-                    self.output_ready.emit(line)
-                    continue
-                if self.process.poll() is not None:
-                    rest = self.process.stdout.read()
-                    if rest:
-                        self.output_ready.emit(rest)
-                    break
-                threading.Event().wait(0.05)
-        self.done.emit(self.process.wait())
+    def _await_exit(self, managed: ManagedProcess) -> None:
+        returncode = managed.process.wait()
+        self.done.emit(returncode)
 
 
 def _format(color: str) -> QTextCharFormat:

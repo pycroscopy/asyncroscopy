@@ -7,7 +7,6 @@ import argparse
 import ast
 import json
 import os
-import signal
 import sys
 import threading
 import time
@@ -31,7 +30,7 @@ PROJECT_DIR = Path(__file__).resolve().parents[1]
 if str(PROJECT_DIR) not in sys.path:
     sys.path.insert(0, str(PROJECT_DIR))
 
-from asyncroscopy.utils.process_manager import ManagedProcess, ProcessManager  # noqa: E402
+from asyncroscopy.utils.process_manager import ManagedProcess, ProcessManager, install_shutdown_signal_handler  # noqa: E402
 
 # Default config used in interactive mode (no --yaml). Passing --yaml <file>
 # selects a different config AND runs headlessly (no prompts).
@@ -486,20 +485,7 @@ def print_summary(
 
 
 def main(argv: list[str] | None = None) -> int:
-    shutdown_requested = False
-
-    def request_shutdown(_signum, _frame) -> None:
-        nonlocal shutdown_requested
-        if shutdown_requested:
-            return
-        shutdown_requested = True
-        raise KeyboardInterrupt
-
-    signal.signal(signal.SIGTERM, request_shutdown)
-    if hasattr(signal, "SIGHUP"):
-        signal.signal(signal.SIGHUP, request_shutdown)
-    if hasattr(signal, "SIGBREAK"):
-        signal.signal(signal.SIGBREAK, request_shutdown)
+    install_shutdown_signal_handler()
 
     args = parse_args(argv)
     config_path = args.yaml or DEFAULT_CONFIG_PATH

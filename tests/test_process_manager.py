@@ -2,6 +2,10 @@ import json
 import os
 import signal
 import subprocess
+import sys
+import time
+
+import pytest
 
 from asyncroscopy.utils import process_manager
 from asyncroscopy.utils.process_manager import ProcessManager, ManagedProcess
@@ -215,3 +219,38 @@ def test_stop_processes_on_port(tmp_path, monkeypatch):
         assert count == 2
         assert 1001 in killed_pids
         assert 1002 in killed_pids
+
+
+def test_start_process_streams_output_via_callback(tmp_path):
+    manager = ProcessManager(name="test_run", state_dir=tmp_path)
+    received = []
+
+    with manager:
+        managed = manager.start_process(
+            "echo_key",
+            "Echo",
+            [sys.executable, "-c", "print('hello-callback')"],
+            on_output=received.append,
+        )
+        managed.process.wait(timeout=5)
+        deadline = time.time() + 2
+        while not received and time.time() < deadline:
+            time.sleep(0.01)
+
+    assert received == ["hello-callback"]
+    # The callback is additive - lines still land in the regular buffer too.
+    assert list(managed.stdout_lines) == ["hello-callback"]
+
+
+def test_install_shutdown_signal_handler_converts_sigterm_to_keyboard_interrupt(monkeypatch):
+    installed = {}
+    monkeypatch.setattr(process_manager.signal, "signal", lambda sig, handler: installed.setdefault(sig, handler))
+
+    process_manager.install_shutdown_signal_handler()
+
+    assert signal.SIGTERM in installed
+    with pytest.raises(KeyboardInterrupt):
+        installed[signal.SIGTERM](signal.SIGTERM, None)
+
+    # A second delivery is a no-op once shutdown is already underway.
+    installed[signal.SIGTERM](signal.SIGTERM, None)
