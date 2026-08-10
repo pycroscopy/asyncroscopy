@@ -105,7 +105,7 @@ class SPMMicroscope(Instrument):
         return 'SPM'
     
     def read_spm_mode(self) -> SPMMode:
-        return self._get_spm_mode()
+        return self._hw_get_spm_mode()
     
     def _connect(self):
         self._connect_hardware()
@@ -178,7 +178,7 @@ class SPMMicroscope(Instrument):
     @tango.server.command(dtype_out=str) #the only direct function
     def get_meter_values(self) -> str:
         """Read current meter values (Sum, Deflection, Lateral, Z) as JSON."""
-        return json.dumps(self._get_meter_values())
+        return json.dumps(self._hw_get_meter_values())
 
     # ------------------------------------------------------------------
     # Commands — delegators to sub-devices
@@ -193,52 +193,68 @@ class SPMMicroscope(Instrument):
         """Acquire a spectrum using SPECTROSCOPY device settings; returns a DATA/Tiled uid."""
         return self._get_proxy('spectroscopy').acquire_spectrum()
     
-    @tango.server.command(dtype_out=str)
-    def approach(self) -> str:
-        """Approach the tip to the surface; returns resulting approach state as JSON."""
+    @tango.server.command(dtype_out=tango.DevBoolean)
+    def approach(self) -> bool:
+        """Approach the tip to the surface; returns True if approached."""
         proxy = self._get_proxy('approach')
         proxy.approach()
-        return json.dumps({'approached': bool(proxy.approached)})
+        return proxy.approached
     
-    @tango.server.command(dtype_out=str)
-    def retract(self) -> str:
-        """Retract the tip from the surface; returns resulting approach state as JSON."""
+    @tango.server.command(dtype_out=tango.DevBoolean)
+    def retract(self) -> bool:
+        """Retract the tip from the surface; returns True if still approached."""
         proxy = self._get_proxy('approach')
         proxy.retract()
-        return json.dumps({'approached': bool(proxy.approached)})   
+        return proxy.approached
 
-    @tango.server.command(dtype_out=str)
-    def feedback_on(self) -> str:
-        """Engage the Z feedback loop; returns resulting feedback state as JSON."""
+    @tango.server.command(dtype_out=tango.DevBoolean)
+    def feedback_on(self) -> bool:
+        """Engage the Z feedback loop; returns True if feedback loop is active."""
         proxy = self._get_proxy('feedback')
         proxy.feedback_on()
-        return json.dumps({'feedback_on': bool(proxy.feedback_on_bool),
-                           'setpoint': float(proxy.setpoint)})
+        return proxy.feedback_on_bool
     
-    @tango.server.command(dtype_out=str)
-    def feedback_off(self) -> str:
-        """Disengage the Z feedback loop; returns resulting feedback state as JSON."""
+    @tango.server.command(dtype_out=tango.DevBoolean)
+    def feedback_off(self) -> bool:
+        """Disengage the Z feedback loop; returns True if feedback loop is still active."""
         proxy = self._get_proxy('feedback')
         proxy.feedback_off()
-        return json.dumps({'feedback_on': bool(proxy.feedback_on_bool)})  
+        return proxy.feedback_on_bool 
     
-    @tango.server.command(dtype_in=tango.DevFloat, dtype_out=str)
-    def set_setpoint(self, setpoint: float) -> str:
-        """Set the feedback setpoint; returns the value read back as JSON."""
+    @tango.server.command(dtype_in=tango.DevDouble, dtype_out=tango.DevDouble)
+    def set_setpoint(self, setpoint: float) -> float:
+        """Set the feedback setpoint; returns the value read back as float."""
         proxy = self._get_proxy('feedback')
         proxy.setpoint = setpoint
-        return json.dumps({'setpoint': float(proxy.setpoint)})
+        return proxy.setpoint
     
-    @tango.server.command(dtype_in=tango.DevVarFloatArray, dtype_out=str)
-    def move_stage(self, position) -> str:
-        """Move the coarse stage; returns the final position as JSON."""
+    @tango.server.command(dtype_in=tango.DevVarDoubleArray, dtype_out=tango.DevVarDoubleArray)
+    def move_stage(self, position) -> list[float]:
+        """Move the stage to an absolute position.
+
+        :param position: [stage_x_m, stage_y_m] — absolute target in meters.
+        Returns the final position [stage_x_m, stage_y_m] in meters.
+        """
         proxy = self._get_proxy('stage')
         proxy.move_stage(position)
-        return json.dumps({'position': list(proxy.position)})
+        return [proxy.stage_x, proxy.stage_y]
     
-    @tango.server.command(dtype_in=tango.DevVarFloatArray, dtype_out=str)
-    def move_probe(self, position) -> str:
-        """Move the probe within the scan frame; returns the final position as JSON."""
+    @tango.server.command(dtype_in=tango.DevVarDoubleArray, dtype_out=tango.DevVarDoubleArray)
+    def move_probe(self, position) -> list[float]:
+        """Move the probe to an absolute position; returns the final position [x, y] in meters."""
         proxy = self._get_proxy('scan')
         proxy.move_probe(position)
-        return json.dumps({'probe_position': list(proxy.probe_position)})
+        return [proxy.probe_x_m, proxy.probe_y_m]
+
+    # ------------------------------------------------------------------
+    # Abstract methods — vendor-specific
+    # ------------------------------------------------------------------
+    @abstractmethod
+    def _hw_get_spm_mode(self) -> SPMMode:
+        """Return the active SPM operating mode."""
+        pass
+
+    @abstractmethod
+    def _hw_get_meter_values(self) -> dict:
+        """Return current meter values with keys 'sum', 'deflection', 'lateral', 'z'."""
+        pass

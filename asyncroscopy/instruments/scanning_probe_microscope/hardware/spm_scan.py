@@ -88,6 +88,24 @@ class SPM_SCAN(tango.server.Device, metaclass=CombinedMeta):
         doc="Line rate in Hz.",
     )
 
+    probe_x_m = tango.server.attribute(
+        label="Probe X Position", 
+        dtype=float,
+        access=tango.AttrWriteType.READ_WRITE,
+        unit="m",
+        format="%e",
+        doc="Current probe X position in meters.",
+    )
+
+    probe_y_m = tango.server.attribute(
+        label="Probe Y Position",
+        dtype=float,
+        access=tango.AttrWriteType.READ_WRITE,
+        unit="m",
+        format="%e",
+        doc="Current probe Y position in meters.",
+    )
+
     # ------------------------------------------------------------------
     # Initialization
     # ------------------------------------------------------------------
@@ -131,6 +149,27 @@ class SPM_SCAN(tango.server.Device, metaclass=CombinedMeta):
             "scan_angle_deg": self._scan_angle_deg,
             "scan_rate_hz": self._scan_rate_hz,
         }
+    
+    def _move_probe(self, x: float, y: float) -> None:
+        """Run one probe move with state bookkeeping; refuses during a scan."""
+        state = self.get_state()
+        if state == tango.DevState.RUNNING:
+            tango.Except.throw_exception(
+                "ScanInProgress",
+                "Cannot move probe while a scan is running; call stop_scan first.",
+                "move_probe()",
+            )
+        if state == tango.DevState.MOVING:
+            tango.Except.throw_exception(
+                "MoveInProgress",
+                "A probe move is already running.",
+                "move_probe()",
+            )
+        self.set_state(tango.DevState.MOVING)
+        try:
+            self._hw_move_probe(x, y)
+        finally:
+            self.set_state(tango.DevState.ON)
 
     # ------------------------------------------------------------------
     # Attribute read / write, writes pushed to hardware
@@ -172,6 +211,22 @@ class SPM_SCAN(tango.server.Device, metaclass=CombinedMeta):
     def write_scan_rate_hz(self, value: float) -> None:
         self._write_param("scan_rate_hz", value)
 
+    def read_probe_x_m(self) -> float:
+        return self._hw_read_probe_position()[0]
+
+    def write_probe_x_m(self, value: float) -> None:
+        y = self._hw_read_probe_position()[1]
+        self._move_probe(value, y)
+
+    def read_probe_y_m(self) -> float:
+        return self._hw_read_probe_position()[1]
+
+    def write_probe_y_m(self, value: float) -> None:
+        x = self._hw_read_probe_position()[0]
+        self._move_probe(x, value)
+
+    
+
     # ------------------------------------------------------------------
     # Commands
     # ------------------------------------------------------------------
@@ -203,8 +258,15 @@ class SPM_SCAN(tango.server.Device, metaclass=CombinedMeta):
 
     @tango.server.command
     def refresh_params(self) -> None:
-        """Re-read all scan parameters from hardware, e.g. after changes in the vendor GUI."""
+        """Re-read all scan parameters from hardware."""
         self._refresh_params()
+
+    @tango.server.command(dtype_in=tango.DevVarDoubleArray)
+    def move_probe(self, position) -> None:
+        """Move the probe to an absolute position [x, y] in meters."""
+        if len(position) != 2:
+            raise ValueError("position must contain exactly two values: [x, y]")
+        self._move_probe(float(position[0]), float(position[1]))
 
     # ------------------------------------------------------------------
     # Abstract methods — vendor-specific
@@ -228,6 +290,16 @@ class SPM_SCAN(tango.server.Device, metaclass=CombinedMeta):
     @abstractmethod
     def _hw_stop_scan(self) -> None:
         """Abort the running scan."""
+        pass
+
+    @abstractmethod
+    def _hw_read_probe_position(self) -> list[float]:
+        """Return the current probe position [x, y] in meters."""
+        pass
+
+    @abstractmethod
+    def _hw_move_probe(self, x: float, y: float) -> None:
+        """Move the probe to (x, y) in meters; return when done."""
         pass
 
 # ----------------------------------------------------------------------

@@ -66,7 +66,7 @@ class SPM_STAGE(tango.server.Device, metaclass=CombinedMeta):
     # Commands
     # ------------------------------------------------------------------
 
-    @tango.server.command(dtype_in=tango.DevVarFloatArray)
+    @tango.server.command(dtype_in=tango.DevVarDoubleArray)
     def move_stage(self, position) -> None:
         """Move the stage to an absolute position [x, y] in meters. Blocks until done."""
         if len(position) != 2:
@@ -74,7 +74,7 @@ class SPM_STAGE(tango.server.Device, metaclass=CombinedMeta):
         current = self._hw_read_stage_position()
         self._do_move(float(position[0]) - current[0], float(position[1]) - current[1])
 
-    @tango.server.command(dtype_in=tango.DevVarFloatArray)
+    @tango.server.command(dtype_in=tango.DevVarDoubleArray)
     def move_stage_relative(self, delta) -> None:
         """Move the stage by [dx, dy] in meters. Blocks until done."""
         if len(delta) != 2:
