@@ -486,7 +486,13 @@ def print_summary(
 
 
 def main(argv: list[str] | None = None) -> int:
+    shutdown_requested = False
+
     def request_shutdown(_signum, _frame) -> None:
+        nonlocal shutdown_requested
+        if shutdown_requested:
+            return
+        shutdown_requested = True
         raise KeyboardInterrupt
 
     signal.signal(signal.SIGTERM, request_shutdown)
