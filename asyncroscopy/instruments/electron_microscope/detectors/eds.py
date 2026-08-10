@@ -2,7 +2,7 @@
 EDS (Energy disperive X-ray spectroscopy) detector Tango device.
 
 This device holds acquisition settings for the EDS detector.
-It does NOT talk to AutoScript directly — the STEMMicroscope device
+It does NOT talk to AutoScript directly — the STEMMicroscope device (although this will change in the future)
 reads these attributes via DeviceProxy before acquiring.
 """
 

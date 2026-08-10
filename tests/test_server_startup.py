@@ -164,7 +164,6 @@ def test_can_start_scan_data_and_microscope_servers(tango_database, tmp_path) ->
             "testing_mode_bool": [True],
             "scan_device_address": [scan_device],
             "camera_device_address": [""],
-            "flucam_device_address": [""],
             "eds_device_address": [""],
             "stage_device_address": [""],
             "data_device_address": [data_device],

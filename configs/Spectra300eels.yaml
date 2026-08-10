@@ -1,16 +1,13 @@
-# Local test setup (utkarsh's ThinkPad) — everything on localhost.
-# Mirrors what was validated in issue #92: AutoScript on localhost:9095.
-#
-#   uv run startup_scripts/run_servers.py --yaml configs/ThinkPad-utkarsh-covalent-setup.yaml
-
 instrument:
   class_name: AutoScriptMicroscope
   file: asyncroscopy/instruments/electron_microscope/auto_script.py
-  description: "Local Spectra 300 against a localhost AutoScript server"
-  hardware_host: localhost
+  description: "Thermo Fisher Spectra 300 TEM"
+  hardware_host: 10.46.217.241
   hardware_port: 9095
   timeout_seconds: 120
 
+# Support device servers. class_name defaults to the key upper-cased
+# (camera -> CAMERA); add `class_name:` to a device only to override that.
 devices:
   camera:    { module_name: asyncroscopy.instruments.electron_microscope.detectors.camera }
   corrector: { module_name: asyncroscopy.instruments.electron_microscope.hardware.corrector }
@@ -21,16 +18,22 @@ devices:
     class_name: AutoScriptSTAGE
     module_name: asyncroscopy.instruments.electron_microscope.hardware.stage_autoscript
     properties:
-      hardware_host: localhost
+      hardware_host: 10.46.217.241
       hardware_port: 9095
+  eels:
+    module_name: asyncroscopy.instruments.electron_microscope.detectors.eels_gatan
+    properties:
+      hardware_host: 10.46.217.242
+      hardware_port: 9092
+      data_device_address: asyncroscopy/data/default
 
 tango:
-  host: localhost
+  host: 10.46.217.241
   port: 9094
   reset_database_file: false
 
 tiled:
-  host: localhost
+  host: 10.46.217.241
   port: 9091
   acquisition_dir: outputs/tiled_acquisitions
   autostart: true

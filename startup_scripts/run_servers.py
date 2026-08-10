@@ -31,7 +31,7 @@ PROJECT_DIR = Path(__file__).resolve().parents[1]
 if str(PROJECT_DIR) not in sys.path:
     sys.path.insert(0, str(PROJECT_DIR))
 
-from asyncroscopy.utils.process_manager import ManagedProcess, ProcessManager
+from asyncroscopy.utils.process_manager import ManagedProcess, ProcessManager  # noqa: E402
 
 # Default config used in interactive mode (no --yaml). Passing --yaml <file>
 # selects a different config AND runs headlessly (no prompts).
@@ -82,6 +82,7 @@ class InstrumentConfig:
     hardware_host: str | None = None
     hardware_port: int | None = None
     timeout_seconds: int | None = None
+    properties: dict[str, list[str]] = field(default_factory=dict)
 
     @property
     def module_name(self) -> str:
@@ -140,6 +141,10 @@ def _class_name_from_file(path: Path) -> str:
 
 def _instrument_config(raw: dict) -> InstrumentConfig:
     instrument_file = _instrument_file(_require(raw, "file", "instrument"))
+    properties = {
+        name: [str(item) for item in value] if isinstance(value, list) else [str(value)]
+        for name, value in (raw.get("properties") or {}).items()
+    }
     return InstrumentConfig(
         class_name=raw.get("class_name") or _class_name_from_file(instrument_file),
         file=instrument_file,
@@ -147,6 +152,7 @@ def _instrument_config(raw: dict) -> InstrumentConfig:
         hardware_host=raw.get("hardware_host"),
         hardware_port=int(raw["hardware_port"]) if raw.get("hardware_port") else None,
         timeout_seconds=int(raw["timeout_seconds"]) if raw.get("timeout_seconds") else None,
+        properties=properties,
     )
 
 
@@ -208,7 +214,7 @@ def device_address_properties(config: Config) -> dict[str, list[str]]:
 
 
 def instrument_properties(config: Config) -> dict[str, list[str]]:
-    properties = device_address_properties(config)
+    properties = {**config.instrument.properties, **device_address_properties(config)}
     if config.instrument.hardware_host is not None:
         properties['hardware_host'] = [str(config.instrument.hardware_host)]
     if config.instrument.hardware_port is not None:

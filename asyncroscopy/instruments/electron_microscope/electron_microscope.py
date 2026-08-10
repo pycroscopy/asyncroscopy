@@ -64,14 +64,6 @@ class ElectronMicroscope(Instrument):
         "No-DB mode: 'tango://127.0.0.1:8888/asyncroscopy/camera/default#dbase=no'",
     )
 
-    flucam_device_address = device_property(
-        dtype=str,
-        default_value="",
-        doc="Tango device address for the FLUCAM settings device. "
-        "DB mode: 'asyncroscopy/flucam/default' "
-        "No-DB mode: 'tango://127.0.0.1:8888/asyncroscopy/flucam/default#dbase=no'",
-    )
-
     stem_mode = attribute(
         label="STEM Mode",
         dtype=bool,
@@ -138,13 +130,15 @@ class ElectronMicroscope(Instrument):
     def acquire_camera_image(self) -> str:
         """Acquire a camera image using settings from the camera device."""
         camera = self._detector_proxies.get('camera')
-        return self._acquire_camera_image(camera.imsize, camera.exposure_time, 'BM-Ceta', camera.readout_area)
-
-    @command(dtype_out=str)
-    def acquire_flucam_image(self) -> str:
-        """Acquire a Flucam image using settings from the flucam device."""
-        flucam = self._detector_proxies.get('flucam')
-        return self._acquire_camera_image(flucam.imsize, flucam.exposure_time, 'Flucam', flucam.readout_area)
+        return self._acquire_camera_image(
+            camera.imsize,
+            camera.exposure_time,
+            camera.camera_detector,
+            camera.readout_area,
+            camera.frame_combining,
+            camera.electron_counting,
+            camera.output_format,
+        )
 
     @command(dtype_in=int, dtype_out=DevEncoded)
     def get_image_data_cached(self, index: int) -> tuple[str, bytes]:
@@ -294,7 +288,16 @@ class ElectronMicroscope(Instrument):
         """Vendor-specific scanned image acquisition implementation."""
         pass
 
-    def _acquire_camera_image(self, imsize: int, exposure_time: float, detector: str, readout_area: str) -> str:
+    def _acquire_camera_image(
+        self,
+        imsize: int,
+        exposure_time: float,
+        detector: str,
+        readout_area: str,
+        frame_combining: int = 1,
+        electron_counting: bool = True,
+        output_format: str = '.h5',
+    ) -> str:
         """Vendor-specific camera acquisition implementation."""
         tango.Except.throw_exception(
             'UnsupportedCommand',

@@ -1,138 +1,324 @@
+"""Tests for LLM Device with mocked imports"""
+
+import asyncio
 import json
-from unittest.mock import MagicMock
+import sys
+import types
+
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-import tango
 
-# ======================================================================
-# Mocks
-# ======================================================================
+def setup_llm_stubs():
+    """Stub every import in llm.py's try block so the module loads without the real agent deps."""
+    if sys.platform == "win32":
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-class ToolMock:
-    def __init__(self, name="test_tool", description="A dummy tool for testing."):
-        self.name = name
-        self.description = description
-        self.called = False
-        self.call_args = None
+    if "langgraph.graph" in sys.modules:
+        return
 
-    async def ainvoke(self, args_dict):
-        self.called = True
-        self.call_args = args_dict
-        return "Observation: Tool executed successfully."
+    base_msg_cls = type("BaseMessage", (), {})
+    human_msg_cls = type("HumanMessage", (base_msg_cls,), {
+        "__init__": lambda self, content, name=None: (
+            setattr(self, "content", content) or setattr(self, "name", name)
+        ),
+    })
+    system_msg_cls = type("SystemMessage", (base_msg_cls,), {
+        "__init__": lambda self, content: setattr(self, "content", content),
+    })
 
-    def reset(self):
-        self.called = False
-        self.call_args = None
+    langchain_core = types.ModuleType("langchain_core")
+    lc_tools = types.ModuleType("langchain_core.tools")
+    lc_tools.BaseTool = type("BaseTool", (), {})
+    lc_messages = types.ModuleType("langchain_core.messages")
+    lc_messages.BaseMessage = base_msg_cls
+    lc_messages.HumanMessage = human_msg_cls
+    lc_messages.SystemMessage = system_msg_cls
+    langchain_core.tools = lc_tools
+    langchain_core.messages = lc_messages
 
+    langchain = types.ModuleType("langchain")
+    lc_cm = types.ModuleType("langchain.chat_models")
+    lc_cm.init_chat_model = MagicMock()
+    langchain.chat_models = lc_cm
+    
+    lc_agents = types.ModuleType("langchain.agents")
+    lc_agents.create_agent = MagicMock()
+    langchain.agents = lc_agents
 
-class ModelMock:
-    def __init__(self):
-        self.call_count = 0
-        self.side_effects = []
-        self.default_content = "Final Answer: Default mock response."
+    lc_mcp = types.ModuleType("langchain_mcp_adapters")
+    lc_mcp_client = types.ModuleType("langchain_mcp_adapters.client")
+    lc_mcp_client.MultiServerMCPClient = MagicMock()
+    lc_mcp.client = lc_mcp_client
 
-    async def ainvoke(self, *args, **kwargs):
-        self.call_count += 1
-        if self.side_effects:
-            return self.side_effects.pop(0)
-        msg = MagicMock()
-        msg.content = self.default_content
-        return msg
+    lg = types.ModuleType("langgraph")
+    lg_graph = types.ModuleType("langgraph.graph")
+    lg_graph.END = "__end__"
+    lg_graph.START = "__start__"
+    lg_graph.StateGraph = MagicMock()
+    lg.graph = lg_graph
 
-    def reset(self):
-        self.call_count = 0
-        self.side_effects = []
-
-# ======================================================================
-# Fixtures
-# ======================================================================
-
-@pytest.fixture(scope="module")
-def mock_tool():
-    return ToolMock()
-
-@pytest.fixture(scope="module")
-def model_mock():
-    return ModelMock()
-
-@pytest.fixture(scope="module")
-def llm_proxy(tango_ctx):
-    """Creates a DeviceProxy connection to the LLM device in tango_ctx."""
-    return tango.DeviceProxy(tango_ctx.get_device_access("asyncroscopy/llm/default"))
-
-@pytest.fixture(autouse=True)
-def setup_and_reset_llm_mocks(tango_ctx, mock_tool, model_mock):
-    """
-    Injects the mocks into the live Python LLM instance hosted by 
-    MultiDeviceTestContext and resets mock states before each test.
-    """
-    mock_tool.reset()
-    model_mock.reset()
-
-    llm_instance = tango_ctx.get_device("asyncroscopy/llm/default")
-
-    # Get actual Device instance
-    util = tango.Util.instance()
-    llm_server_device = util.get_device_by_name("asyncroscopy/llm/default")
-
-    llm_server_device.set_state(tango.DevState.ON)
-    llm_server_device._tools = [mock_tool]
-    llm_server_device._model = model_mock
+    sys.modules.update({
+        "langchain_core": langchain_core,
+        "langchain_core.tools": lc_tools,
+        "langchain_core.messages": lc_messages,
+        "langchain": langchain,
+        "langchain.chat_models": langchain.chat_models,
+        "langchain.agents": langchain.agents,
+        "langchain_mcp_adapters": lc_mcp,
+        "langchain_mcp_adapters.client": lc_mcp_client,
+        "langgraph": lg,
+        "langgraph.graph": lg_graph,
+    })
 
 
-# ======================================================================
+setup_llm_stubs()
+
+from asyncroscopy.mcp.llm import Agent, LLM
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _make_llm(**kwargs) -> LLM:
+    """Return a bare LLM instance without touching Tango at all."""
+    device = LLM.__new__(LLM)
+    device._max_steps = kwargs.get("max_steps", 5)
+    device._agents: list[Agent] = kwargs.get("agents", [])
+    device._tools = kwargs.get("tools", [])
+    device._model = kwargs.get("model", None)
+    device._mcp_clients = []
+    
+    device._tango_properties = {}
+    device.ollama_model = "mock-model"
+    
+    # Mock C++ Tango logging methods that would otherwise segfault 
+    # when called on an uninitialized C++ object
+    device.info_stream = MagicMock()
+    device.error_stream = MagicMock()
+    device.debug_stream = MagicMock()
+    device.set_state = MagicMock()
+    device.set_status = MagicMock()
+    
+    return device
+
+
+def _make_tool(name: str) -> MagicMock:
+    t = MagicMock()
+    t.name = name
+    return t
+
+
+def _make_agent(name="worker", system_prompt="You are helpful.", tools=None) -> Agent:
+    return Agent(name=name, system_prompt=system_prompt, tools=tools or ["*"])
+
+
+# ---------------------------------------------------------------------------
 # Tests
-# ======================================================================
+# ---------------------------------------------------------------------------
 
-def test_device_initialization_state(llm_proxy):
-    """Test that the device initializes successfully and turns ON."""
-    assert llm_proxy.state() == tango.DevState.ON
+class TestGetAgentTools:
+    def test_wildcard_returns_all(self):
+        tools = [_make_tool("math_add"), _make_tool("read_file"), _make_tool("write_file")]
+        device = _make_llm(tools=tools)
+        assert device._get_agent_tools(["*"]) is tools
 
+    def test_exact_name_match(self):
+        t_read = _make_tool("read_file")
+        t_write = _make_tool("write_file")
+        device = _make_llm(tools=[t_read, t_write])
+        result = device._get_agent_tools(["read_file"])
+        assert result == [t_read]
 
-def test_tools_attribute(llm_proxy):
-    """Test that the tools attribute properly returns the JSON tools schema."""
-    tools_json = llm_proxy.tools
-    tools = json.loads(tools_json)
-    
-    assert len(tools) == 1
-    assert tools[0]["name"] == "test_tool"
-    assert tools[0]["description"] == "A dummy tool for testing."
+    def test_glob_prefix(self):
+        tools = [_make_tool("math_add"), _make_tool("math_sub"), _make_tool("read_file")]
+        device = _make_llm(tools=tools)
+        result = device._get_agent_tools(["math_*"])
+        assert len(result) == 2
+        assert all(t.name.startswith("math_") for t in result)
 
+    def test_multiple_patterns(self):
+        tools = [_make_tool("math_add"), _make_tool("read_file"), _make_tool("write_file")]
+        device = _make_llm(tools=tools)
+        result = device._get_agent_tools(["math_*", "read_file"])
+        assert len(result) == 2
 
-def test_query_direct_answer(llm_proxy, model_mock):
-    """Test a simple query where the model provides an immediate final answer."""
-    response = llm_proxy.Query("Hello!")
-    
-    assert response == "Default mock response."
-    assert model_mock.call_count == 1
+    def test_no_match_returns_empty(self):
+        device = _make_llm(tools=[_make_tool("math_add")])
+        assert device._get_agent_tools(["nonexistent"]) == []
 
-
-def test_query_with_tool_execution(llm_proxy, model_mock, mock_tool):
-    """Test the agent loop when the model decides to use a tool before answering."""
-    tool_request_msg = MagicMock()
-    tool_request_msg.content = 'Action: test_tool\nArguments: {"test_arg": 1}'
-    
-    final_answer_msg = MagicMock()
-    final_answer_msg.content = "Final Answer: The tool gave me the data."
-    
-    model_mock.side_effects = [tool_request_msg, final_answer_msg]
-
-    response = llm_proxy.Query("Run the test tool.")
-    
-    assert response == "The tool gave me the data."
-    assert model_mock.call_count == 2
-    assert mock_tool.called is True
-    assert mock_tool.call_args == {"test_arg": 1}
+    def test_empty_tool_list(self):
+        device = _make_llm(tools=[])
+        assert device._get_agent_tools(["*"]) == []
 
 
-def test_query_max_steps_limit(llm_proxy, model_mock):
-    """Test that the loop exits gracefully if it hits max_steps without a final answer."""
-    infinite_tool_msg = MagicMock()
-    infinite_tool_msg.content = "Action: test_tool\nArguments: {}"
-    
-    model_mock.side_effects = [infinite_tool_msg] * 10
-    
-    response = llm_proxy.Query("Do an infinite loop.")
-    
-    assert "Action: test_tool" in response
-    assert model_mock.call_count == 5
+class TestExtractJson:
+    def test_bare_json_passthrough(self):
+        device = _make_llm()
+        raw = '{"next": "worker", "task": "do something"}'
+        assert device._extract_json(raw) == raw
+
+    def test_strips_json_code_fence(self):
+        device = _make_llm()
+        fenced = '```json\n{"next": "worker"}\n```'
+        assert device._extract_json(fenced) == '{"next": "worker"}'
+
+    def test_strips_plain_code_fence(self):
+        device = _make_llm()
+        fenced = '```\n{"next": "FINISH"}\n```'
+        assert device._extract_json(fenced) == '{"next": "FINISH"}'
+
+    def test_whitespace_stripped(self):
+        device = _make_llm()
+        assert device._extract_json('  {"a": 1}  ') == '{"a": 1}'
+
+    def test_non_json_text_passthrough(self):
+        device = _make_llm()
+        text = "Just some plain text"
+        assert device._extract_json(text) == text
+
+
+class TestParseRoutingDecision:
+    def test_valid_next_returned(self):
+        device = _make_llm()
+        content = '{"next": "worker", "task": "scan the sample"}'
+        next_agent, subtask = device._parse_routing_decision(content, ["worker", "FINISH"], "FINISH")
+        assert next_agent == "worker"
+        assert subtask == "scan the sample"
+
+    def test_invalid_next_falls_back(self):
+        device = _make_llm()
+        content = '{"next": "nonexistent_agent", "task": "whatever"}'
+        next_agent, _ = device._parse_routing_decision(content, ["worker", "FINISH"], "FINISH")
+        assert next_agent == "FINISH"
+
+    def test_missing_next_key_falls_back(self):
+        device = _make_llm()
+        content = '{"task": "do something"}'
+        # decision.get("next", fallback) returns fallback when key is absent
+        next_agent, _ = device._parse_routing_decision(content, ["worker"], "worker")
+        assert next_agent == "worker"
+
+    def test_malformed_json_falls_back(self):
+        device = _make_llm()
+        next_agent, subtask = device._parse_routing_decision("{broken json!!}", ["worker"], "worker")
+        assert next_agent == "worker"
+        assert subtask == ""
+
+    def test_fenced_json_parsed(self):
+        device = _make_llm()
+        content = '```json\n{"next": "FINISH", "task": ""}\n```'
+        next_agent, _ = device._parse_routing_decision(content, ["worker", "FINISH"], "worker")
+        assert next_agent == "FINISH"
+
+    def test_missing_task_key_returns_empty_string(self):
+        device = _make_llm()
+        content = '{"next": "worker"}'
+        _, subtask = device._parse_routing_decision(content, ["worker"], "worker")
+        assert subtask == ""
+
+
+class TestSpawnAgent:
+    def test_spawn_adds_agent(self):
+        device = _make_llm()
+        config = json.dumps({"name": "Alpha", "system_prompt": "You scan.", "tools": ["scan_*"]})
+        result = device.SpawnAgent(config)
+        assert result is True
+        assert len(device._agents) == 1
+        assert device._agents[0].name == "Alpha"
+        assert device._agents[0].tools == ["scan_*"]
+
+    def test_spawn_multiple_agents(self):
+        device = _make_llm()
+        for i in range(3):
+            device.SpawnAgent(json.dumps({"name": f"Agent{i}", "system_prompt": "help", "tools": ["*"]}))
+        assert len(device._agents) == 3
+
+    def test_spawn_defaults_tools_to_wildcard(self):
+        device = _make_llm()
+        device.SpawnAgent(json.dumps({"name": "Beta", "system_prompt": "help"}))
+        assert device._agents[0].tools == ["*"]
+
+    def test_spawn_missing_required_field_returns_false(self):
+        device = _make_llm()
+        # "name" is required by Agent dataclass
+        result = device.SpawnAgent(json.dumps({"system_prompt": "missing name"}))
+        assert result is False
+        assert device._agents == []
+
+    def test_spawn_invalid_json_returns_false(self):
+        device = _make_llm()
+        result = device.SpawnAgent("{bad json")
+        assert result is False
+
+    def test_spawn_preserves_description(self):
+        device = _make_llm()
+        device.SpawnAgent(json.dumps({"name": "Gamma", "system_prompt": "help", "description": "does science"}))
+        assert device._agents[0].description == "does science"
+
+
+class TestMaxSteps:
+    def test_read_default(self):
+        device = _make_llm()
+        assert device.read_max_steps() == 5
+
+    def test_write_valid(self):
+        device = _make_llm()
+        device.write_max_steps(10)
+        assert device.read_max_steps() == 10
+
+    def test_write_zero_raises(self):
+        device = _make_llm()
+        with pytest.raises(ValueError):
+            device.write_max_steps(0)
+
+    def test_write_negative_raises(self):
+        device = _make_llm()
+        with pytest.raises(ValueError):
+            device.write_max_steps(-3)
+
+    def test_write_one_is_valid(self):
+        device = _make_llm()
+        device.write_max_steps(1)
+        assert device.read_max_steps() == 1
+
+
+class TestRunSwarm:
+    def test_no_agents_returns_error_message(self):
+        device = _make_llm()
+        result = asyncio.run(device._run_swarm("hello"))
+        assert "No agents available" in result
+
+    def test_single_agent_calls_stream_agent(self):
+        """Single-agent path skips the supervisor graph entirely."""
+        agent = _make_agent(name="Solo")
+        device = _make_llm(agents=[agent])
+
+        # Replace internal helpers so no LangChain objects are needed
+        device._build_agent_executor = MagicMock(return_value=MagicMock())
+        device._stream_agent = AsyncMock(return_value="42 is the answer.")
+
+        result = asyncio.run(device._run_swarm("What is the answer?"))
+
+        assert result == "42 is the answer."
+        device._build_agent_executor.assert_called_once_with(agent)
+        device._stream_agent.assert_called_once()
+
+    def test_single_agent_receives_prompt_in_message(self):
+        """The prompt must be forwarded as the HumanMessage content."""
+        agent = _make_agent()
+        device = _make_llm(agents=[agent])
+        device._build_agent_executor = MagicMock(return_value=MagicMock())
+
+        captured_messages = []
+
+        async def fake_stream(executor, messages, agent_label=""):
+            captured_messages.extend(messages)
+            return "done"
+
+        device._stream_agent = fake_stream
+
+        asyncio.run(device._run_swarm("scan now"))
+        assert len(captured_messages) == 1
+        assert captured_messages[0].content == "scan now"

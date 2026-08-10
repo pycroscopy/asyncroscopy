@@ -16,8 +16,9 @@ Real AutoScript image commands save the adorned object on disk and return the
 DATA/Tiled unique id for that saved acquisition.
 """
 
-import time
 import json
+import math
+import time
 
 import numpy as np
 import tango
@@ -34,7 +35,7 @@ try:
     import autoscript_tem_microscope_client
     from autoscript_tem_microscope_client import TemMicroscopeClient
     from autoscript_tem_microscope_client.enumerations import EdsDetectorType
-    from autoscript_tem_microscope_client.enumerations import CameraType, RegionCoordinateSystem, ExposureTimeType
+    from autoscript_tem_microscope_client.enumerations import CameraType, FixedReadoutArea, RegionCoordinateSystem, ExposureTimeType
     from autoscript_tem_microscope_client.structures import Region, Rectangle
     from autoscript_tem_microscope_client.structures import StemAcquisitionSettings, EdsAcquisitionSettings, RunOptiStemSettings, CameraAcquisitionSettings, StemDataSettings
 
@@ -178,7 +179,6 @@ class AutoScriptMicroscope(ElectronMicroscope):
             "stage": self.stage_device_address,
             "scan": self.scan_device_address,
             "camera": self.camera_device_address,
-            "flucam": self.flucam_device_address,
             "data": self.data_device_address,
         }
         for name, address in addresses.items():
@@ -269,15 +269,54 @@ class AutoScriptMicroscope(ElectronMicroscope):
         return save_acquisition(self, data_server, "stem_image", detector_list, adorned, output_format=output_format)
 
 
-    def _acquire_camera_image(self, imsize: int, exposure_time: float, detector: str, readout_area: str) -> str:
+    def _acquire_camera_image(
+        self,
+        imsize: int,
+        exposure_time: float,
+        detector: str,
+        readout_area: str,
+        frame_combining: int = 1,
+        electron_counting: bool = True,
+        output_format: str = ".h5",
+    ) -> str:
         """
-        Call AutoScript acquisition, save the adorned image, and return its DATA/Tiled key.
-        this is the advanced version
+        Call advanced AutoScript camera acquisition, save the adorned image,
+        and return its DATA/Tiled key.
         """
-        settings = CameraAcquisitionSettings(camera_detector=detector, size=imsize, exposure_time=exposure_time, fixed_readout_area=readout_area, frame_combining=1)
+        camera_detector = {
+            "Flucam": CameraType.FLUCAM,
+            "BM-Ceta": CameraType.BM_CETA,
+            "EF-Ceta": CameraType.EF_CETA,
+            "BM-Falcon": CameraType.BM_FALCON,
+            "EF-Falcon": CameraType.EF_FALCON,
+            "BM-Empad": CameraType.BM_EMPAD,
+            "SH-Empad": CameraType.SH_EMPAD,
+            "EF-CCD": CameraType.EF_CCD,
+            "EF-Empad": CameraType.EF_EMPAD,
+        }.get(detector, detector)
+        fixed_readout_area = {
+            "Full": FixedReadoutArea.FULL,
+            "Half": FixedReadoutArea.HALF,
+            "Quarter": FixedReadoutArea.QUARTER,
+        }.get(readout_area, readout_area)
+        settings = CameraAcquisitionSettings(
+            camera_detector=camera_detector,
+            size=imsize,
+            exposure_time=exposure_time,
+            fixed_readout_area=fixed_readout_area,
+            frame_combining=frame_combining,
+            electron_counting=electron_counting,
+        )
         adorned = self._microscope.acquisition.acquire_camera_image_advanced(settings)
         data_server = self._detector_proxies.get("data")
-        return save_acquisition(self, data_server, "camera_image", str(detector), adorned)
+        return save_acquisition(
+            self,
+            data_server,
+            "camera_image",
+            str(detector),
+            adorned,
+            output_format=output_format,
+        )
 
     def _acquire_scanned_data_advanced(self, imsize: int, dwell_time: float, detector: str, scan_region: list[float]) -> str:
         """

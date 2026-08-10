@@ -1,6 +1,7 @@
 """
 # This python program has to be run in Gatan's DigitalMicrograph in background mode
 # Utilizes Hybrid Mode because python API is not complete.
+# useful scripting stuff at: Gatan>Documentation>Scripting_IFControl.pdf
 #
 # Author: Gerd Duscher, UTK
 # July 30th 2026 
@@ -46,7 +47,7 @@ class EELSServer:
 
     def get_available_dispersions(self):    
         """ Get available dispersion settrings with indices from Gatan Image Filter """
-        ommand = "number nDisp = IFGetNumberOfDispersions( ) \nstring message = \"\" \n"
+        command = "number nDisp = IFGetNumberOfDispersions( ) \nstring message = \"\" \n"
         command += "for ( number i = 0; i < nDisp; i++ )\n{message +=  i + \": \" + IFGetDispersion( i )+\", \" \n} \n"
         command += "setpersistentstringnote(\"EELSserver:DefaultValues:availableDispersions\", message)"
 
@@ -96,6 +97,7 @@ class EELSServer:
         command += "for ( number i = 0; i < nAp; i++ )\n{message +=  i + \": \" + IFGetApertureLabel( i )+\", \" \n} \n"
         command += "setpersistentstringnote(\"EELSserver:DefaultValues:availableApertures\", message)"
         DM.ExecuteScriptString( command )
+        globalTags = DM.GetPersistentTagGroup()
         success, self.available_apertures = globalTags.GetTagAsString("EELSserver:DefaultValues:availableApertures")
         return str(self.available_apertures)
 

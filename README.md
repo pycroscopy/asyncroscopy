@@ -47,6 +47,7 @@ asyncroscopy/
 | `Spectra300.yaml` | Real Thermo Fisher Spectra 300 setup |
 | `DigitalTwin.yaml` | Simulated microscope for development/testing |
 | `diffraction.yaml` | DigitalTwin with diffraction simulation |
+| `digital_twin_tilt.yaml` | ASE/abTEM multislice silicon lamella tilt twin |
 | `mcp.yaml` | MCP server configuration (not hardware) |
 
 These are some examples of the available configs, which define the instrument class, supporting devices, Tango connection, and Tiled settings.
@@ -54,7 +55,7 @@ These are some examples of the available configs, which define the instrument cl
 ## Optional Dependencies
 
 ```bash
-# Diffraction simulation (abTEM-based)
+# Diffraction and tilt-twin multislice simulation (abTEM-based)
 uv sync --extra diffraction
 
 # AI agent support (LangChain/OpenAI)
@@ -93,6 +94,8 @@ Various example workflows in `notebooks/`, including:
 - `05_Digital_Twin_EDS.ipynb` - DigitalTwin EDS simulation
 - `06_Digital_Twin_Tilt.ipynb` - DigitalTwin tilt control
 - `11_Test_AI_Agent.ipynb` - MCP agent testing
+- `15_MAPED.ipynb` - Multi-angle precession electron diffraction
+- `16_Alpha_Tilt_Diffraction_Map.ipynb` - Tracked alpha-tilt diffraction mapping
 
 ## Notes
 * The previous Twisted-based implementation is preserved in the `twisted-legacy` branch for reference.
