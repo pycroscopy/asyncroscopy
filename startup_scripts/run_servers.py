@@ -8,7 +8,6 @@ import ast
 import json
 import os
 import signal
-import subprocess
 import sys
 import threading
 import time
@@ -26,21 +25,17 @@ import yaml
 DATABASE_TIMEOUT_SECONDS = 120
 TILED_COMMAND_TIMEOUT_MILLIS = 120_000
 TILED_STARTUP_REGISTRATION_TIMEOUT_MILLIS = 3_600_000
-PROCESS_OUTPUT_LINES = 200
-TANGO_DATABASE_FILES = ("tango_database.db", "Tango_database.db")
 
 PROJECT_DIR = Path(__file__).resolve().parents[1]
 
 if str(PROJECT_DIR) not in sys.path:
     sys.path.insert(0, str(PROJECT_DIR))
 
+from asyncroscopy.utils.process_manager import ManagedProcess, ProcessManager  # noqa: E402
+
 # Default config used in interactive mode (no --yaml). Passing --yaml <file>
 # selects a different config AND runs headlessly (no prompts).
 DEFAULT_CONFIG_PATH = PROJECT_DIR / 'configs' / 'Spectra300.yaml'
-
-
-def process_output_buffer() -> deque[str]:
-    return deque(maxlen=PROCESS_OUTPUT_LINES)
 
 
 class Style:
@@ -72,30 +67,11 @@ class DeviceConfig:
 
     @property
     def command(self) -> list[str]:
-        return ["uv", "run", "python", "-m", self.module_name, self.instance_name]
+        return ["uv", "run", "python", "-u", "-m", self.module_name, self.instance_name]
 
     @property
     def instance_name(self) -> str:
         return f"{self.key}_instance"
-
-
-@dataclass
-class ManagedProcess:
-    key: str
-    label: str
-    command: list[str]
-    process: subprocess.Popen[bytes]
-    log_path: Path | None = None
-    stdout_lines: deque[str] = field(default_factory=process_output_buffer)
-    stderr_lines: deque[str] = field(default_factory=process_output_buffer)
-
-    @property
-    def pid(self) -> int:
-        return self.process.pid
-
-    @property
-    def running(self) -> bool:
-        return self.process.poll() is None
 
 
 @dataclass(frozen=True)
@@ -106,6 +82,7 @@ class InstrumentConfig:
     hardware_host: str | None = None
     hardware_port: int | None = None
     timeout_seconds: int | None = None
+    properties: dict[str, list[str]] = field(default_factory=dict)
 
     @property
     def module_name(self) -> str:
@@ -164,6 +141,10 @@ def _class_name_from_file(path: Path) -> str:
 
 def _instrument_config(raw: dict) -> InstrumentConfig:
     instrument_file = _instrument_file(_require(raw, "file", "instrument"))
+    properties = {
+        name: [str(item) for item in value] if isinstance(value, list) else [str(value)]
+        for name, value in (raw.get("properties") or {}).items()
+    }
     return InstrumentConfig(
         class_name=raw.get("class_name") or _class_name_from_file(instrument_file),
         file=instrument_file,
@@ -171,6 +152,7 @@ def _instrument_config(raw: dict) -> InstrumentConfig:
         hardware_host=raw.get("hardware_host"),
         hardware_port=int(raw["hardware_port"]) if raw.get("hardware_port") else None,
         timeout_seconds=int(raw["timeout_seconds"]) if raw.get("timeout_seconds") else None,
+        properties=properties,
     )
 
 
@@ -232,7 +214,7 @@ def device_address_properties(config: Config) -> dict[str, list[str]]:
 
 
 def instrument_properties(config: Config) -> dict[str, list[str]]:
-    properties = device_address_properties(config)
+    properties = {**config.instrument.properties, **device_address_properties(config)}
     if config.instrument.hardware_host is not None:
         properties['hardware_host'] = [str(config.instrument.hardware_host)]
     if config.instrument.hardware_port is not None:
@@ -351,35 +333,6 @@ def make_environment(
     }
 
 
-def start_process(
-    key: str,
-    label: str,
-    command: list[str],
-    environment: dict[str, str],
-    log_dir: Path | None = None,
-) -> ManagedProcess:
-    popen_kwargs = {
-        "env": environment,
-        "cwd": PROJECT_DIR,
-        "stdout": subprocess.PIPE,
-        "stderr": subprocess.PIPE,
-    }
-    if os.name == "nt": # checks for windows
-        popen_kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-    else:
-        popen_kwargs["start_new_session"] = True
-
-    process = subprocess.Popen(
-        command,
-        **popen_kwargs,
-    )
-    log_path = log_dir / f'{key}.log' if log_dir is not None else None
-    managed = ManagedProcess(key=key, label=label, command=command, process=process, log_path=log_path)
-    drain_process_output(process.stdout, managed.stdout_lines, log_path, 'stdout')
-    drain_process_output(process.stderr, managed.stderr_lines, log_path, 'stderr')
-    return managed
-
-
 def drain_process_output(
     stream: BufferedReader | None,
     output: deque[str],
@@ -407,157 +360,7 @@ def drain_process_output(
 
 def buffered_output(lines: deque[str]) -> str:
     return "\n".join(line for line in lines if line)
-
-
-def stop_process(process: ManagedProcess, timeout: float = 5.0) -> None:
-    if not process.running and os.name == "nt":
-        return
-    if os.name == "nt": # checks for windows
-        process.process.terminate()
-    else:
-        try:
-            os.killpg(process.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            if not process.running:
-                return
-            process.process.terminate()
-        except OSError:
-            process.process.terminate()
-    try:
-        process.process.wait(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        if os.name == "nt": # checks for windows
-            process.process.kill()
-        else:
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            except OSError:
-                process.process.kill()
-        process.process.wait(timeout=timeout)
-
-
-def stop_all(processes: Iterable[ManagedProcess]) -> None:
-    for process in reversed(list(processes)):
-        stop_process(process)
-
-
-def stop_processes_on_port(port: int) -> int:
-    if os.name == "nt": # checks for windows
-        try:
-            result = subprocess.run(["netstat", "-ano", "-p", "tcp"], capture_output=True, text=True)
-        except FileNotFoundError:
-            status_line("SKIP", f"database port {port}", "netstat is not available")
-            return 0
-
-        pids: set[int] = set()
-        for line in result.stdout.splitlines():
-            parts = line.split()
-            if len(parts) < 5 or parts[0].upper() != "TCP":
-                continue
-            local_address = parts[1]
-            state = parts[3].upper()
-            pid = parts[-1]
-            if state == "LISTENING" and local_address.rsplit(":", 1)[-1] == str(port) and pid.isdigit():
-                pids.add(int(pid))
-
-        stopped = 0
-        for pid in sorted(pids):
-            try:
-                result = subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, text=True)
-            except FileNotFoundError:
-                status_line("SKIP", f"PID {pid}", "taskkill is not available")
-                continue
-            if result.returncode == 0:
-                stopped += 1
-            else:
-                status_line("FAIL", f"PID {pid}", (result.stderr or result.stdout).strip())
-        return stopped
-
-    try:
-        result = subprocess.run(["lsof", "-ti", f":{port}"], capture_output=True, text=True)
-    except FileNotFoundError:
-        status_line("SKIP", f"database port {port}", "lsof is not installed")
-        return 0
-
-    stopped = 0
-    for line in result.stdout.splitlines():
-        if not line.strip().isdigit():
-            continue
-        try:
-            os.kill(int(line), signal.SIGTERM)
-            stopped += 1
-        except ProcessLookupError:
-            pass
-        except PermissionError:
-            status_line("FAIL", f"PID {line}", "permission denied")
-    return stopped
-
-
-def stop_python_process_matching(pattern: str) -> bool:
-    if os.name == "nt": # checks for windows
-        script = (
-            "$pattern = $args[0]; "
-            "Get-CimInstance Win32_Process | "
-            "Where-Object { $_.CommandLine -and $_.CommandLine.Contains($pattern) } | "
-            "ForEach-Object { Stop-Process -Id $_.ProcessId -Force; $_.ProcessId }"
-        )
-        try:
-            result = subprocess.run(
-                ["powershell.exe", "-NoProfile", "-Command", script, pattern],
-                capture_output=True,
-                text=True,
-            )
-        except FileNotFoundError:
-            return False
-        return result.returncode == 0 and bool(result.stdout.strip())
-
-    try:
-        result = subprocess.run(["pkill", "-f", pattern], capture_output=True, text=True)
-    except FileNotFoundError:
-        return False
-    return result.returncode == 0
-
-
-def clear_old_processes(
-    port: int,
-    devices: list[DeviceConfig],
-    config: Config,
-    tiled_port: int | None = None,
-) -> None:
-    stopped_databases = stop_processes_on_port(port)
-    status_line("OK" if stopped_databases else "SKIP", f"database port {port}", f"{stopped_databases} process(es) signaled")
-
-    if tiled_port is not None and tiled_port != port:
-        stopped_tiled = stop_processes_on_port(tiled_port)
-        status_line("OK" if stopped_tiled else "SKIP", f"Tiled port {tiled_port}", f"{stopped_tiled} process(es) signaled")
-
-    stopped_servers = 0
-    cleanup_patterns = {f"{device.class_name} {device.instance_name}" for device in devices}
-    cleanup_patterns.update(instrument_cleanup_patterns(config))
-    for pattern in sorted(cleanup_patterns):
-        if stop_python_process_matching(pattern):
-            stopped_servers += 1
-
-    status_line("OK" if stopped_servers else "SKIP", "old device servers", f"{stopped_servers} process group(s) signaled")
-    time.sleep(2)
-
-
-def delete_tango_database_files() -> list[Path]:
-    deleted = []
-    for filename in TANGO_DATABASE_FILES:
-        path = PROJECT_DIR / filename
-        if not path.exists():
-            continue
-        path.unlink()
-        deleted.append(path)
-    if deleted:
-        status_line("OK", "Tango database file", ", ".join(path.name for path in deleted))
-    else:
-        status_line("SKIP", "Tango database file", "no local .db file found")
-    return deleted
-
+    
 
 def wait_for_database(host: str, port: int, timeout: int) -> float:
     start = time.monotonic()
@@ -741,6 +544,7 @@ def main(argv: list[str] | None = None) -> int:
         start_database = prompt_bool("Start Tango database", True)
         should_register_devices = prompt_bool("Register devices", True)
         device_timeout = prompt_int("Device startup timeout seconds", config.device_timeout_seconds)
+        
         if instrument_config.hardware_host is not None:
             registered_instrument_properties['hardware_host'] = [
                 prompt_str("Hardware host", str(instrument_config.hardware_host))
@@ -755,9 +559,7 @@ def main(argv: list[str] | None = None) -> int:
             ]
 
     total_steps = 5
-
     environment = make_environment(host, port, tiled_host, tiled_port, acquisition_dir)
-    processes: list[ManagedProcess] = []
     ready_times: dict[str, float] = {}
     tiled_config = None
 
@@ -776,126 +578,143 @@ def main(argv: list[str] | None = None) -> int:
     print_inventory(devices)
 
     try:
-        print_section(1, total_steps, "Clearing old processes")
-        if clear_first:
-            clear_old_processes(port, devices, config, tiled_port if should_start_tiled else None)
-        else:
-            status_line("SKIP", "old process cleanup")
-        if reset_database_file and start_database:
-            delete_tango_database_files()
-        elif reset_database_file:
-            status_line("SKIP", "Tango database file", "database startup is disabled")
-
-        print_section(2, total_steps, "Starting Tango database")
-        if start_database:
-            database = start_process(
-                "database",
-                "Tango database",
-                ["uv", "run", "python", "-m", "tango.databaseds.database", "2"],
-                environment,
-                log_dir,
-            )
-            processes.append(database)
-            print("  WAIT  database readiness", end="", flush=True)
-            elapsed = wait_for_database(host, port, DATABASE_TIMEOUT_SECONDS)
-            ready_times["database"] = elapsed
-            print(
-                f" {color('OK', Style.green)} pid={database.pid} ready in {elapsed:.1f}s"
-            )
-        else:
-            print("  WAIT  existing database readiness", end="", flush=True)
-            elapsed = wait_for_database(host, port, DATABASE_TIMEOUT_SECONDS)
-            ready_times["database"] = elapsed
-            print(f" {color('OK', Style.green)} ready in {elapsed:.1f}s")
-
-        print_section(3, total_steps, "Registering devices")
-        if should_register_devices:
-            register_devices(devices, registered_instrument_properties)
-        else:
-            status_line("SKIP", "device registration")
-
-        print_section(4, total_steps, "Starting device servers")
-        for device in regular_devices:
-            process = start_process(device.key, device.class_name, device.command, environment, log_dir)
-            processes.append(process)
-            status_line("RUN", device.key, f"{device.module_name}  pid={process.pid}")
-
-        for device in regular_devices:
-            print(f"  WAIT  {device.device_name:<34}", end="", flush=True)
-            elapsed = wait_for_device(device.device_name, device_timeout)
-            ready_times[device.key] = elapsed
-            print(f" {color('OK', Style.green)} ready in {elapsed:.1f}s")
-
-        if should_start_tiled:
-            tiled_config = json.loads(get_data_proxy().start_tiled_server())
-            if tiled_config["tiled_server"] != "yes":
-                raise RuntimeError(
-                    f"Tiled HTTP server failed to start: {tiled_config['tiled_server_status']}"
-                )
-            status_line("OK", "Tiled HTTP server", f"{tiled_config['uri']} serving {tiled_config['tiled_server_serving']}")
-            if should_register_tiled:
-                status_line("WAIT", "Tiled startup registration", "registering acquisition directory; this can take a while")
-                tiled_registration = register_tiled_save_path()
-                tiled_config.update(tiled_registration)
-                status_line("OK", "Tiled startup registration", tiled_registration["registered_path"])
+        with ProcessManager() as manager:
+            print_section(1, total_steps, "Clearing old processes")
+            if clear_first:
+                ports_to_clear = [port]
+                if should_start_tiled:
+                    ports_to_clear.append(tiled_port)
+                manager.scour_ports(ports_to_clear)
             else:
-                status_line("SKIP", "Tiled startup registration", "register_on_startup=false; files register manually")
-        else:
-            status_line("SKIP", "Tiled HTTP server")
-            if should_register_tiled:
-                status_line("SKIP", "Tiled startup registration", "Tiled HTTP server autostart is disabled")
+                status_line("SKIP", "old process cleanup")
+                
+            if reset_database_file and start_database:
+                manager.wipe_databases()
+            elif reset_database_file:
+                status_line("SKIP", "Tango database file", "database startup is disabled")
 
-        for device in dependency_devices:
-            print()
-            status_line("RUN", device.key, f"{device.module_name}  starting after dependencies")
-            process = start_process(device.key, device.class_name, device.command, environment, log_dir)
-            processes.append(process)
-            print(f"  WAIT  {device.device_name:<34}", end="", flush=True)
-            elapsed = wait_for_device(device.device_name, device_timeout)
-            ready_times[device.key] = elapsed
-            print(f" {color('OK', Style.green)} ready in {elapsed:.1f}s")
+            print_section(2, total_steps, "Starting Tango database")
+            if start_database:
+                database = manager.start_process(
+                    key="database",
+                    label="Tango database",
+                    command=["uv", "run", "python", "-m", "tango.databaseds.database", "2"],
+                    env=environment,
+                )
+                print("  WAIT  database readiness", end="", flush=True)
+                elapsed = wait_for_database(host, port, DATABASE_TIMEOUT_SECONDS)
+                ready_times["database"] = elapsed
+                print(f" {color('OK', Style.green)} pid={database.pid} ready in {elapsed:.1f}s")
+            else:
+                print("  WAIT  existing database readiness", end="", flush=True)
+                elapsed = wait_for_database(host, port, DATABASE_TIMEOUT_SECONDS)
+                ready_times["database"] = elapsed
+                print(f" {color('OK', Style.green)} ready in {elapsed:.1f}s")
 
-        print_summary(
-            host,
-            port,
-            processes,
-            ready_times,
-            tiled_config,
-            step=total_steps,
-            total=total_steps,
-        )
-        print()
-        print(
-            color(
-                "Leave this terminal open while you use the servers. Press Ctrl+C to stop them.",
-                Style.dim,
+            print_section(3, total_steps, "Registering devices")
+            if should_register_devices:
+                register_devices(devices, registered_instrument_properties)
+            else:
+                status_line("SKIP", "device registration")
+
+            print_section(4, total_steps, "Starting device servers")
+            for device in regular_devices:
+                process = manager.start_process(
+                    key=device.key, 
+                    label=device.class_name, 
+                    command=device.command, 
+                    env=environment
+                )
+                status_line("RUN", device.key, f"{device.module_name}  pid={process.pid}")
+
+            for device in regular_devices:
+                print(f"  WAIT  {device.device_name:<34}", end="", flush=True)
+                elapsed = wait_for_device(device.device_name, device_timeout)
+                ready_times[device.key] = elapsed
+                print(f" {color('OK', Style.green)} ready in {elapsed:.1f}s")
+
+            if should_start_tiled:
+                tiled_config = json.loads(get_data_proxy().start_tiled_server())
+                if tiled_config["tiled_server"] != "yes":
+                    raise RuntimeError(f"Tiled HTTP server failed to start: {tiled_config['tiled_server_status']}")
+                status_line("OK", "Tiled HTTP server", f"{tiled_config['uri']} serving {tiled_config['tiled_server_serving']}")
+                
+                if should_register_tiled:
+                    status_line("WAIT", "Tiled startup registration", "registering acquisition directory; this can take a while")
+                    tiled_registration = register_tiled_save_path()
+                    tiled_config.update(tiled_registration)
+                    status_line("OK", "Tiled startup registration", tiled_registration["registered_path"])
+                else:
+                    status_line("SKIP", "Tiled startup registration", "register_on_startup=false; files register manually")
+            else:
+                status_line("SKIP", "Tiled HTTP server")
+                if should_register_tiled:
+                    status_line("SKIP", "Tiled startup registration", "Tiled HTTP server autostart is disabled")
+
+            for device in dependency_devices:
+                print()
+                status_line("RUN", device.key, f"{device.module_name}  starting after dependencies")
+                process = manager.start_process(
+                    key=device.key, 
+                    label=device.class_name, 
+                    command=device.command, 
+                    env=environment
+                )
+                print(f"  WAIT  {device.device_name:<34}", end="", flush=True)
+                elapsed = wait_for_device(device.device_name, device_timeout)
+                ready_times[device.key] = elapsed
+                print(f" {color('OK', Style.green)} ready in {elapsed:.1f}s")
+
+            print_summary(
+                host,
+                port,
+                manager.active_processes,
+                ready_times,
+                tiled_config,
+                step=total_steps,
+                total=total_steps,
             )
-        )
-        while True:
-            time.sleep(1)
-
-    except KeyboardInterrupt:
-        print()
-        print(color("Shutdown requested. Stopping managed processes...", Style.yellow))
-        stop_tiled_server()
-        stop_all(processes)
+            print()
+            print(color("Leave this terminal open while you use the servers. Press Ctrl+C to stop them.", Style.dim))
+            
+            try:
+                while True:
+                    time.sleep(0.1)
+            except KeyboardInterrupt:
+                # Catch the Ctrl-C INSIDE the with block so processes are still alive!
+                print()
+                print(color("Shutdown requested. Stopping Tiled server...", Style.yellow))
+                stop_tiled_server() 
+                print(color("Stopping managed processes...", Style.yellow))
+                
         status_line("OK", "shutdown complete")
         return 0
-    except Exception as exc:
+
+    except Exception as exc:   
+        # Catches actual startup crashes
         print()
         print(color(f"Startup failed: {exc}", Style.bold + Style.red))
         if log_dir is not None:
-            # The pump threads already own the streams in debug mode — point at the
-            # per-server log files rather than draining the pipes a second time.
             print(color(f"Per-server logs in {log_dir}:", Style.bold + Style.yellow))
-            for process in processes:
-                print(f"  {process.key:<14} pid={process.pid} returncode={process.process.poll()}  {process.log_path}")
-        else:
-            print_debug_output(processes)
-        stop_tiled_server()
-        stop_all(processes)
-        return 1
 
+        if 'manager' in locals() and manager.history:
+            print_debug_output(manager.history)
+            
+            if log_dir is not None:
+                for p in manager.history:
+                    stdout = buffered_output(p.stdout_lines)
+                    stderr = buffered_output(p.stderr_lines)
+                    log_file = log_dir / f"{p.key}.log"
+                    log_file.write_text(f"STDOUT:\n{stdout}\n\nSTDERR:\n{stderr}", encoding="utf-8")
+                print(color(f"Saved logs to {log_dir}", Style.bold + Style.yellow))
+
+        # Stop tiled on a crash
+        try:
+            stop_tiled_server() 
+        except Exception:
+            pass
+            
+        return 1
 
 if __name__ == "__main__":
     raise SystemExit(main())

@@ -9,11 +9,16 @@ instrument:
 # Support device servers. class_name defaults to the key upper-cased
 # (camera -> CAMERA); add `class_name:` to a device only to override that.
 devices:
+  aperture:
+    class_name: AutoScriptAPERTURE
+    module_name: asyncroscopy.instruments.electron_microscope.hardware.aperture_autoscript
+    properties:
+      hardware_host: 10.46.217.241
+      hardware_port: 9095
   camera:    { module_name: asyncroscopy.instruments.electron_microscope.detectors.camera }
   corrector: { module_name: asyncroscopy.instruments.electron_microscope.hardware.corrector }
   data:      { module_name: asyncroscopy.data.data }
   eds:       { module_name: asyncroscopy.instruments.electron_microscope.detectors.eds }
-  flucam:    { module_name: asyncroscopy.instruments.electron_microscope.detectors.flucam }
   scan:      { module_name: asyncroscopy.instruments.electron_microscope.hardware.scan }
   stage:
     class_name: AutoScriptSTAGE

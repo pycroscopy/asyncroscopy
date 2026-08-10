@@ -12,7 +12,6 @@ if str(PROJECT_DIR) not in sys.path:
 # Import Qt through qt_compat so this GUI can use PyQt6 normally and PyQt5 on 
 # legacy Windows 10 systems that cannot load Qt6. 
 from startup_guis.qt_compat import (  # noqa: E402 
-    HORIZONTAL, 
     VERTICAL, 
     QApplication, 
     QCheckBox, 
@@ -38,11 +37,11 @@ from startup_guis.shared import BODY_FONT, CONFIG_DIR, GENERATED_CONFIG_DIR, SEC
 DEFAULT_CONFIG_PATH = CONFIG_DIR / 'Spectra300.yaml' 
 GENERATED_CONFIG_PATH = GENERATED_CONFIG_DIR / 'server_gui.yaml' 
 DEVICE_MODULES = { 
+    'aperture': 'asyncroscopy.instruments.electron_microscope.hardware.aperture_autoscript',
     'camera': 'asyncroscopy.instruments.electron_microscope.detectors.camera', 
     'corrector': 'asyncroscopy.instruments.electron_microscope.hardware.corrector', 
     'data': 'asyncroscopy.data.data', 
     'eds': 'asyncroscopy.instruments.electron_microscope.detectors.eds', 
-    'flucam': 'asyncroscopy.instruments.electron_microscope.detectors.flucam', 
     'scan': 'asyncroscopy.instruments.electron_microscope.hardware.scan', 
     'stage': 'asyncroscopy.instruments.electron_microscope.hardware.stage', 
 } 

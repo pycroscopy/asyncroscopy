@@ -21,7 +21,7 @@ If you're editing this class, you're usually doing one of these:
    Add a thin `@command` that validates input, reads any settings from a
    detector proxy, then calls a vendor `_helper`. Existing groups:
    - acquisition — `acquire_scanned_image`, `acquire_spectrum`,
-     `acquire_camera_image`, `acquire_flucam_image`,
+     `acquire_camera_image`,
      `acquire_scanned_data_advanced`
    - beam / optics — `place_beam`, `place_beam_list`, `blank_beam`,
      `unblank_beam`, `set_defocus` / `get_defocus`, `set_image_shift`,

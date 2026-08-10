@@ -19,7 +19,6 @@ Twin("DigitalTwin<br>simulation device server"):::purple
 
 Scan("SCAN<br>settings device server"):::blue
 Camera("CAMERA<br>settings device server"):::blue
-Flucam("FLUCAM<br>settings device server"):::blue
 Eds("EDS<br>settings device server"):::blue
 StageServer("STAGE<br>state device server"):::blue
 CorrectorServer("CORRECTOR<br>settings device server"):::blue
@@ -50,7 +49,6 @@ subgraph SupportStack["Supporting device servers"]
 direction TB
 Scan
 Camera
-Flucam
 Eds
 StageServer
 CorrectorServer
@@ -81,7 +79,6 @@ Tango --> Twin
 
 Tango --> Scan
 Tango --> Camera
-Tango --> Flucam
 Tango --> Eds
 Tango --> StageServer
 Tango --> CorrectorServer
@@ -89,7 +86,6 @@ Tango --> DataDevice
 
 AutoScriptMicroscope --> Scan
 AutoScriptMicroscope --> Camera
-AutoScriptMicroscope --> Flucam
 AutoScriptMicroscope --> Eds
 AutoScriptMicroscope --> StageServer
 AutoScriptMicroscope --> CorrectorServer

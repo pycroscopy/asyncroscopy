@@ -4,5 +4,13 @@ tango:
   host: localhost
   port: 9094
 
-mcp_url: "http://127.0.0.1:8000/mcp"
-local_model_path: C:\Users\Public\Desktop\Agents\Gemma4-31B
+mcp_url: "http://127.0.0.1:8001/mcp"
+local_model_path: C:\Users\Public\Desktop\Agents\Gemma4-31B-4bit
+
+startup_agents:
+  - name: "base"
+    system_prompt: "You are a helpful assistant that can answer questions and provide information."
+    tools: ["list_devices"]
+  - name: "image"
+    system_prompt: "You are an image acquiring assistant."
+    tools: ["*image"]

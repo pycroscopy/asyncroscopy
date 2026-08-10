@@ -1,0 +1,74 @@
+instrument:
+  class_name: DigitalTwinTilt
+  file: asyncroscopy/instruments/electron_microscope/digital_twin_tilt.py
+  description: "Silicon FIB-lamella tilt and diffraction digital twin"
+  timeout_seconds: 120
+  properties:
+    sample_seed: 731
+    lamella_width_nm: 620
+    lamella_height_nm: 360
+    lamella_thickness_nm: 100
+    gridbar_width_nm: 220
+    layer_period_nm: 45
+    overview_fov_nm: 1100
+    diffraction_image_size: 32
+    diffraction_max_angle_mrad: 60
+    convergence_angle_mrad: 4.7
+    silicon_lattice_parameter_angstrom: 5.431
+    lattice_parameter_gradient_x_percent: 2.0
+    lattice_parameter_gradient_y_percent: 0.5
+    crystal_rotation_deg: 1.5
+    crystal_rotation_gradient_x_deg: 4.0
+    crystal_rotation_gradient_y_deg: -2.0
+    crystal_tilt_x_mrad: 3.0
+    crystal_tilt_y_mrad: -2.0
+    crystal_tilt_gradient_x_mrad: 10.0
+    crystal_tilt_gradient_y_mrad: -7.0
+    electron_energy_ev: 200000
+    potential_sampling_angstrom: 0.08
+    potential_slice_thickness_angstrom: 1.0
+    multislice_supercell_xy: 4
+    multislice_supercell_z: 8
+    multislice_vacuum_angstrom: 2.0
+    frozen_phonon_sigma_angstrom: 0.03
+    rotation_center_x_nm: -55
+    rotation_center_y_nm: 35
+    rotation_center_z_nm: 125
+    randomness_scale: 1.0
+    stage_translation_noise_std_nm: 0.35
+    tilt_angle_noise_std_deg: 0.06
+    rotation_center_jitter_std_nm: 1.5
+    tilt_wobble_std_nm: 1.0
+    tilt_drift_std_nm_per_degree: 0.08
+    beam_tilt_noise_std_mrad: 0.03
+    beam_tilt_image_shift_nm_per_mrad: 0.8
+    diffraction_center_jitter_std_px: 0.35
+    detector_noise_fraction: 0.012
+    focus_drift_nm_per_degree: 1.4
+    autofocus_residual_std_nm: 2.0
+    haadf_poisson_counts: 180
+
+devices:
+  camera:
+    module_name: asyncroscopy.instruments.electron_microscope.detectors.camera
+  data:
+    module_name: asyncroscopy.data.data
+  scan:
+    module_name: asyncroscopy.instruments.electron_microscope.hardware.scan
+  stage:
+    class_name: TestStage
+    module_name: asyncroscopy.instruments.electron_microscope.hardware.TestStage
+
+tango:
+  host: 127.0.0.1
+  port: 9094
+  reset_database_file: true
+
+tiled:
+  host: 127.0.0.1
+  port: 9091
+  acquisition_dir: outputs/tiled_acquisitions
+  autostart: true
+  register_on_startup: false
+
+device_timeout_seconds: 120

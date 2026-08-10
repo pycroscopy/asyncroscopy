@@ -1,0 +1,42 @@
+instrument:
+  class_name: AutoScriptMicroscope
+  file: asyncroscopy/instruments/electron_microscope/auto_script.py
+  description: "Thermo Fisher Spectra 300 TEM"
+  hardware_host: 10.46.217.241
+  hardware_port: 9095
+  timeout_seconds: 120
+
+# Support device servers. class_name defaults to the key upper-cased
+# (camera -> CAMERA); add `class_name:` to a device only to override that.
+devices:
+  camera:    { module_name: asyncroscopy.instruments.electron_microscope.detectors.camera }
+  corrector: { module_name: asyncroscopy.instruments.electron_microscope.hardware.corrector }
+  data:      { module_name: asyncroscopy.data.data }
+  eds:       { module_name: asyncroscopy.instruments.electron_microscope.detectors.eds }
+  scan:      { module_name: asyncroscopy.instruments.electron_microscope.hardware.scan }
+  stage:
+    class_name: AutoScriptSTAGE
+    module_name: asyncroscopy.instruments.electron_microscope.hardware.stage_autoscript
+    properties:
+      hardware_host: 10.46.217.241
+      hardware_port: 9095
+  eels:
+    module_name: asyncroscopy.instruments.electron_microscope.detectors.eels_gatan
+    properties:
+      hardware_host: 10.46.217.242
+      hardware_port: 9092
+      data_device_address: asyncroscopy/data/default
+
+tango:
+  host: 10.46.217.241
+  port: 9094
+  reset_database_file: false
+
+tiled:
+  host: 10.46.217.241
+  port: 9091
+  acquisition_dir: outputs/tiled_acquisitions
+  autostart: true
+  register_on_startup: false
+
+device_timeout_seconds: 120

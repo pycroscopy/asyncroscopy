@@ -1,23 +1,60 @@
+import json
 import sys
 import argparse
-from gevent import os
+import os
+import subprocess
 import yaml
 from pathlib import Path
+from dataclasses import dataclass
+import time
+import tango
+from tango import DeviceProxy
+
 
 PROJECT_DIR = Path(__file__).resolve().parents[1]
 if str(PROJECT_DIR) not in sys.path:
     sys.path.insert(0, str(PROJECT_DIR))
 
-import threading
-import time
-import tango
-from asyncroscopy.mcp.llm import LLM
-from tango import DeviceProxy
+from asyncroscopy.utils.process_manager import ManagedProcess, ProcessManager
+from asyncroscopy.mcp.llm import Agent
 
 DEVICE_NAME = "asyncroscopy/llm/default"
 INSTANCE_NAME = "llm_instance"
+DEFAULT_CONFIG_PATH = PROJECT_DIR / 'configs' / 'gemma-llm.yaml'
 
-def register_device(config: dict | None):
+@dataclass 
+class TangoConfig:
+    host: str
+    port: int
+
+@dataclass
+class LLMConfig:
+    tango: TangoConfig
+    mcp_url: str
+    local_model_path: str | None = None
+    model_provider: str | None = None
+    model_name: str | None = None
+    api_key: str | None = None
+    startup_agents: list[Agent] | None = None
+
+    def __post_init__(self):
+        # Convert tango dict to TangoConfig
+        if isinstance(self.tango, dict):
+            self.tango = TangoConfig(**self.tango)
+
+def _require(mapping: dict, key: str, where: str):
+    if not isinstance(mapping, dict) or key not in mapping:
+        raise KeyError(f"Config section '{where}' is missing required key '{key}'")
+    return mapping[key]
+
+
+def load_config(path: Path) -> LLMConfig:
+    if not path.exists():
+        raise FileNotFoundError(f'Config file not found: {path}')
+    raw = yaml.safe_load(path.read_text(encoding='utf-8')) or {}
+    return LLMConfig(**raw)
+
+def register_device(config: LLMConfig | None):
     database = tango.Database()
     try:
         device_info = tango.DbDevInfo()
@@ -30,94 +67,99 @@ def register_device(config: dict | None):
         print(f"Device already registered or error: {e}")
 
     if config:
-        # Map config keys to device properties
         properties = {}
-        if "mcp_url" in config:
-            properties["mcp_url"] = [config["mcp_url"]]
-        if "local_model_path" in config:
-            properties["local_model_path"] = [config["local_model_path"]]
-        if "model_provider" in config:
-            properties["model_provider"] = [config["model_provider"]]
-        if "model_name" in config:
-            properties["model_name"] = [config["model_name"]]
-        if "api_key" in config:
-            properties["api_key"] = [config["api_key"]]
+        for key, value in config.__dict__.items():
+            if key != "tango":
+                properties[key] = value
+                if key == "startup_agents":
+                    properties[key] = [json.dumps(agent) for agent in value]
         
-        if properties:
-            database.put_device_property(DEVICE_NAME, properties)
-            print(f"Set device properties: {properties}")
+        database.put_device_property(DEVICE_NAME, properties)
+        print(f"Set device properties: {properties}")
 
-def run_server():
-    sys.argv = ["llm.py", INSTANCE_NAME]
-    LLM.run_server()
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--yaml', type=Path, default=DEFAULT_CONFIG_PATH, metavar='PATH', help='LLM YAML config to start from.')
+    parser.add_argument('--interactive', action='store_true', default=False, help='Run in interactive mode, allowing user to send prompts to the LLM device.')
+    return parser.parse_args(argv)
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--yaml", type=Path, help="Path to YAML configuration")
-    parser.add_argument("--interactive", type=bool, default=False, help="Run in interactive mode")
-    args = parser.parse_args()
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
+    try:
+        config = load_config(args.yaml)
+    except (FileNotFoundError, KeyError, ValueError) as exc:
+        print(f'Config error: {exc}', file=sys.stderr)
+        return 1
 
-    config = None
-    if args.yaml:
-        with open(args.yaml, "r") as f:
-            config = yaml.safe_load(f)
-            print(f"Loaded config from {args.yaml}")
-
-    os.environ['TANGO_HOST'] = f'{config["tango"]["host"]}:{config["tango"]["port"]}'
+    tango_host = f'{config.tango.host}:{config.tango.port}'
+    os.environ['TANGO_HOST'] = tango_host
 
     register_device(config)
     
-    # Start server in thread
-    threading.Thread(target=run_server, daemon=True).start()
-    
-    print("Waiting for LLM device to start and initialize...")
-    proxy = None
-    max_wait_seconds = 120
-    
-    for _ in range(max_wait_seconds):
-        try:
-            if proxy is None:
-                proxy = DeviceProxy(DEVICE_NAME)
-                proxy.ping()  # Ensure server is reachable first
+    command = ["uv", "run", "python", "-m", "asyncroscopy.mcp.llm", INSTANCE_NAME]
+    env = {**os.environ, 'TANGO_HOST': tango_host, 'PYTHONUNBUFFERED': '1'}
+
+    try:
+        with ProcessManager() as manager:
+            managed: ManagedProcess = manager.start_process(
+                key="llm",
+                label="LLM Server",
+                command=command,
+                env=env,
+                stdout=None,
+                stderr=None,
+            )
+
+            print("Waiting for LLM device to start and initialize...")
+
+            proxy = None
+            max_wait_seconds = 120
             
-            # Check the actual device state
-            state = proxy.state()
-            if state == tango.DevState.ON:
-                print("Device initialized and ready.")
-                break
-            elif state == tango.DevState.FAULT:
-                print(f"Device initialization failed. Status: {proxy.status()}")
+            for _ in range(max_wait_seconds):
+                try:
+                    if proxy is None:
+                        proxy = DeviceProxy(DEVICE_NAME)
+                        proxy.ping()
+                    
+                    state = proxy.state()
+                    if state == tango.DevState.ON:
+                        print("Device initialized and ready.")
+                        break
+                    elif state == tango.DevState.FAULT:
+                        print(f"Device initialization failed. Status: {proxy.status()}")
+                        return
+                except Exception:
+                    proxy = None
+                
+                time.sleep(1)
+            else:
+                print("Timeout waiting for device to initialize.")
                 return
-            # If state is INIT, continue waiting
-            
-        except Exception:
-            proxy = None  # Reset proxy if connection fails
-        
-        time.sleep(1)
-    else:
-        print("Timeout waiting for device to initialize.")
-        return
 
-    if args.interactive:
-        print("Entering interactive mode. Type 'exit' to quit.")
-        while True:
-            prompt = input("LLM Prompt (or 'exit'): ")
-            if prompt.lower() == 'exit':
-                break
-            
-            try:
-                response = proxy.Query(prompt)
-                print(f"Response: {response}")
-            except Exception as e:
-                print(f"Error: {e}")
+            if args.interactive:
+                print("Entering interactive mode. Type 'exit' to quit.")
+                while True:
+                    prompt = input("LLM Prompt (or 'exit'): ")
+                    if prompt.lower() == 'exit':
+                        break
+                    
+                    try:
+                        response = proxy.Query(prompt)
+                        print(f"Response: {response}")
+                    except Exception as e:
+                        print(f"Error: {e}")
+            else:
+                print("Press Ctrl+C to terminate.")
+                # Loop with timeout so Windows handles SIGINT / Ctrl+C cleanly
+                while managed.running:
+                    try:
+                        managed.process.wait(timeout=0.5)
+                    except subprocess.TimeoutExpired:
+                        pass    
 
-    else:
-        print("Press Ctrl+C to terminate.")
-        try:
-            while True:
-                time.sleep(3600)
-        except KeyboardInterrupt:
-            print("\nShutting down server...")
+    except KeyboardInterrupt:    
+        print("\nShutting down server...")
+        return 0
 
 if __name__ == "__main__":
     main()

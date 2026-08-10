@@ -98,8 +98,9 @@ today are:
 - `list_devices`
 - `get_data_from_key`
 
-`get_data_from_key` reads an acquired HDF5 DATA/Tiled key and returns dataset
-metadata plus a small preview.
+`get_data_from_key` reads an acquired key through the Tiled HTTP URI reported by
+the DATA device and returns dataset metadata plus a small preview. This works
+when MCP and the microscope are on different computers without a shared mount.
 
 ## Blacklisting
 
