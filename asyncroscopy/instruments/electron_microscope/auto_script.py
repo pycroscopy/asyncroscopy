@@ -308,7 +308,6 @@ class AutoScriptMicroscope(ElectronMicroscope):
             exposure_time=exposure_time,
             fixed_readout_area=fixed_readout_area,
             frame_combining=frame_combining,
-            electron_counting=electron_counting,
         )
         adorned = self._microscope.acquisition.acquire_camera_image_advanced(settings)
         data_server = self._detector_proxies.get("data")
