@@ -117,6 +117,11 @@ class ElectronMicroscope(Instrument):
         Acquire an image with scanning detectors and return its DATA/Tiled key.
         The default detector list is ['haadf'].
         """
+        # Tango's wire protocol has no concept of "omitted", so remote callers (e.g. the
+        # MCP/LLM bridge) can and do send an empty list instead of relying on the Python
+        # default above; treat that the same as not specifying detectors.
+        if not detector_list:
+            detector_list = ['haadf']
         scan = self._detector_proxies.get('scan')
         return self._acquire_scanned_image(scan.imsize, scan.dwell_time, detector_list, list(scan.scan_region), scan.output_format)
 

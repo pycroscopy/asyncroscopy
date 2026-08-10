@@ -64,7 +64,7 @@ class LLM(Device):
     async def init_device(self) -> None:
         await Device.init_device(self)
         self.set_state(tango.DevState.INIT)
-        self._max_steps = 5
+        self._max_steps = 10
 
         # Registries
         self._agents: list[Agent] = []
@@ -352,23 +352,18 @@ class LLM(Device):
             # Check if agent has contributed if there's another AI/Human message beyond the original user prompt
             has_delegated = len(state["messages"]) > 1
 
+            instructions = (
+                f"Below are the available agents and what each is for:\n{agent_roster}\n\n"
+                "Based on the conversation, decide which agent should act next to progress the user's request. "
+                "Only output FINISH if the user's request has been fully and concretely answered — "
+                "not if an agent asked a question, refused, said it lacks the ability, or otherwise failed to "
+                "complete the task; in that case, route to a different, more suitable agent instead."
+            )
+
             if not has_delegated:
-                # First turn forces subagent routing
-                instructions = (
-                    f"Below are the available agents and what each is for:\n{agent_roster}\n\n"
-                    "Based on the conversation, decide which agent should act next to progress the user's request.\n"
-                    "Only output FINISH if the user's request has been fully and concretely answered — "
-                    "not if an agent asked a question or said it couldn't complete the task; in that case, "
-                    "route to a different agent who might be able to help instead."
-                )
+                # First turn forces subagent routing; FINISH isn't a valid choice yet.
                 valid_options, fallback = agent_names, agent_names[0]
             else:
-                # Later turns either do normal routing or FINISH
-                instructions = (
-                    f"Active agents: {agent_names}.\n"
-                    "Based on the conversation, decide who should act next.\n"
-                    "If the user's request is fully resolved, output FINISH."
-                )
                 valid_options, fallback = options, "FINISH"
 
             sys_prompt = SystemMessage(

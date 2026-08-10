@@ -341,11 +341,29 @@ class ProcessManager:
                     print(f"Failed to delete {filename}: {e}")
 
     def scour_ports(self, ports: list[int]):
-        """Finds and kills any process squatting on critical ports."""
+        """Finds and kills any process squatting on critical ports or stale device server processes."""
         for port in ports:
             count = self.stop_processes_on_port(port)
             if count > 0:
                 print(f"Cleared {count} stale process(es) on port {port}")
+        self.stop_stale_device_servers()
+
+    def stop_stale_device_servers(self):
+        """Finds and kills orphaned Python processes running asyncroscopy device servers."""
+        current_pid = os.getpid()
+        if os.name == "nt":
+            try:
+                cmd = ["wmic", "process", "where", "name='python.exe'", "get", "ProcessId,CommandLine"]
+                res = subprocess.run(cmd, capture_output=True, text=True)
+                for line in res.stdout.splitlines():
+                    if ("asyncroscopy.instruments" in line or "asyncroscopy.data" in line) and "run_servers.py" not in line:
+                        parts = line.strip().split()
+                        if parts and parts[-1].isdigit():
+                            pid = int(parts[-1])
+                            if pid != current_pid:
+                                subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True)
+            except Exception:
+                pass
 
     def stop_processes_on_port(self, port: int) -> int:
         """Identifies and kills processes occupying a specific TCP port."""

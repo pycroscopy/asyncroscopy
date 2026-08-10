@@ -3,12 +3,15 @@
 import argparse
 import base64
 import inspect
+import io
 import re
 import json
+import socket
 import traceback
 from typing import Annotated, Any, Callable
 
 import numpy as np
+from PIL import Image as PILImage
 from pydantic import Field
 from tiled.client import from_uri
 
@@ -24,8 +27,15 @@ from tango.utils import (
 )
 
 from fastmcp import FastMCP
-from fastmcp.tools import tool, Tool
+from fastmcp.tools import tool, Tool, ToolResult
 from fastmcp.server.server import Transport
+from fastmcp.utilities.types import Image as MCPImage
+
+# Tango commands that acquire and save an image, returning its DATA/Tiled key as a
+# plain string. Their tool wrappers additionally fetch the array back from Tiled and
+# attach an inline PNG preview, so chat clients that already render MCP image content
+# blocks (e.g. SciAgentGUI) display the capture without any extra tool call.
+IMAGE_PREVIEW_COMMANDS = {"acquire_camera_image", "acquire_scanned_image"}
 
 
 class MCPServer:
@@ -37,6 +47,7 @@ class MCPServer:
         blocked_functions: dict[str, list[str]],
         blocked_classes: list[str],
         data_device_address: str,
+        include_only_functions: list[str] | None = None,
         verbose: bool = True,
     ):
         """
@@ -48,6 +59,7 @@ class MCPServer:
                 Use "*" for global blocks.
             blocked_classes: Tango device class names to skip entirely.
             data_device_address: Tango DATA device used by get_data_from_key.
+            include_only_functions (list[str], optional): Command names/patterns to allow exclusively.
             verbose (bool, optional): If True, print device discovery and tool registration
                 progress to stdout. Defaults to True.
         """
@@ -58,6 +70,7 @@ class MCPServer:
         self.blocked_classes = list(blocked_classes)
         self._blocked_classes_normalized = {cls_name.lower() for cls_name in self.blocked_classes}
         self.data_device_address = data_device_address
+        self.include_only_functions = list(include_only_functions) if include_only_functions else []
         self.verbose = verbose
         self.tools: dict[str, dict[str, Callable]] = {}
 
@@ -162,6 +175,100 @@ class MCPServer:
         visit(node)
         result["datasets"] = datasets
         return result
+
+    @staticmethod
+    def _find_first_2d_array(node: Any, prefer_key: str | None = None) -> np.ndarray | None:
+        """Recursively search a Tiled node for the first readable 2D dataset.
+
+        Acquisition writers (see asyncroscopy/data/data_writer.py) group image
+        datasets under an "image/<detector>" path, so ``prefer_key`` lets callers
+        check that group first before falling back to a full walk.
+        """
+
+        def search(current: Any) -> np.ndarray | None:
+            read = getattr(current, "read", None)
+            if callable(read):
+                try:
+                    array = np.asarray(read())
+                except Exception:
+                    return None
+                return array if array.ndim == 2 else None
+
+            keys = getattr(current, "keys", None)
+            if callable(keys):
+                for child_name in keys():
+                    try:
+                        found = search(current[child_name])
+                    except Exception:
+                        continue
+                    if found is not None:
+                        return found
+            return None
+
+        if prefer_key is not None:
+            try:
+                found = search(node[prefer_key])
+                if found is not None:
+                    return found
+            except Exception:
+                pass
+        return search(node)
+
+    @staticmethod
+    def _array_to_png_bytes(array: np.ndarray, max_side: int = 1024) -> bytes:
+        """Normalize a 2D array to 8-bit grayscale and encode it as PNG."""
+        values = np.asarray(array, dtype=np.float64)
+        finite = values[np.isfinite(values)]
+        low, high = (float(finite.min()), float(finite.max())) if finite.size else (0.0, 1.0)
+        normalized = (values - low) / (high - low) if high > low else np.zeros_like(values)
+        pixels = np.clip(normalized, 0.0, 1.0)
+        image = PILImage.fromarray((pixels * 255).astype(np.uint8), mode="L")
+        if max(image.size) > max_side:
+            scale = max_side / max(image.size)
+            new_size = (max(1, round(image.width * scale)), max(1, round(image.height * scale)))
+            image = image.resize(new_size, PILImage.NEAREST)
+        buffer = io.BytesIO()
+        image.save(buffer, format="PNG")
+        return buffer.getvalue()
+
+    def _fetch_image_preview(self, key: str) -> MCPImage | None:
+        """Fetch a captured image from Tiled and render it as a PNG preview.
+
+        Returns None instead of raising on any failure (unreachable Tiled server,
+        key not yet registered, no 2D dataset found) so the acquisition tool can
+        still return its text key even when a preview can't be built.
+        """
+        try:
+            data = DeviceProxy(self.data_device_address)
+            config = json.loads(data.get_config())
+            uri = config.get("uri")
+            if not uri:
+                return None
+            node = from_uri(uri)[key]
+            array = self._find_first_2d_array(node, prefer_key="image")
+            if array is None:
+                return None
+            return MCPImage(data=self._array_to_png_bytes(array), format="png")
+        except Exception as exc:
+            if self.verbose:
+                print(f"[image preview] could not build preview for {key!r}: {exc}")
+            return None
+
+    def _augment_with_preview(self, command_name: str, result: Any) -> Any:
+        """Attach an inline image preview to known acquisition commands.
+
+        Returns a ToolResult with both a text content block (the Tiled key,
+        unchanged for existing callers) and an image content block, plus
+        structured_content matching the tool's auto-generated {"result": str}
+        output schema — a bare (text, Image) tuple would leave structured_content
+        empty and fail client-side output-schema validation.
+        """
+        if command_name not in IMAGE_PREVIEW_COMMANDS or not isinstance(result, str) or not result:
+            return result
+        preview = self._fetch_image_preview(result)
+        if preview is None:
+            return result
+        return ToolResult(content=[result, preview], structured_content={"result": result})
 
     @staticmethod
     def _hdf5_attrs_to_json(attrs: Any) -> dict[str, Any]:
@@ -318,7 +425,8 @@ class MCPServer:
         if in_type == CmdArgType.DevVoid:
             def wrapper():
                 result = func()
-                return self._normalize_command_result(out_type, result)
+                normalized = self._normalize_command_result(out_type, result)
+                return self._augment_with_preview(command_name, normalized)
 
             params = []
             
@@ -331,7 +439,8 @@ class MCPServer:
                     arg_input = kwargs
                 
                 result = func(arg_input)
-                return self._normalize_command_result(out_type, result)
+                normalized = self._normalize_command_result(out_type, result)
+                return self._augment_with_preview(command_name, normalized)
 
             # Use VAR_KEYWORD (**kwargs) to make Pydantic accept any incoming fields
             params = [inspect.Parameter("kwargs", inspect.Parameter.VAR_KEYWORD)]
@@ -342,7 +451,8 @@ class MCPServer:
                 # Get first positional arg or parameter name out of kwargs
                 arg = args[0] if args else kwargs.get(param_name)
                 result = func(arg)
-                return self._normalize_command_result(out_type, result)
+                normalized = self._normalize_command_result(out_type, result)
+                return self._augment_with_preview(command_name, normalized)
 
             params = [inspect.Parameter(param_name, inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=arg_type)]
 
@@ -393,6 +503,15 @@ class MCPServer:
                 global_blocks = self.blocked_functions.get("*", [])
                 if command_name in global_blocks or f"{dev_class}.{command_name}" in global_blocks or command_name in self.blocked_functions.get(dev_class, []):
                     continue
+
+                if self.include_only_functions:
+                    allowed = (
+                        command_name in self.include_only_functions
+                        or f"{dev_class}.{command_name}" in self.include_only_functions
+                        or any(item.endswith(f".{command_name}") for item in self.include_only_functions)
+                    )
+                    if not allowed:
+                        continue
                 try:
                     func = getattr(dev, command_name)
                 except Exception as exc:
@@ -495,13 +614,43 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--http-port", type=int, required=True)
     parser.add_argument("--blocked-classes-json", required=True)
     parser.add_argument("--blocked-functions-json", required=True)
+    parser.add_argument("--include-only-functions-json", default="[]")
     parser.add_argument("--data-device-address", required=True)
     parser.add_argument("--quiet", action="store_true")
     return parser.parse_args(argv)
 
 
+def check_port_free(host: str, port: int) -> str | None:
+    """Return an error string if (host, port) cannot be bound, else None.
+
+    Catches the common failure where a previous MCP server (possibly started
+    from a different config) is still holding the port, before setup() prints
+    the "MCP ready" line that GUIs parse as success.
+    """
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        probe.bind((host, port))
+    except OSError as exc:
+        return str(exc)
+    finally:
+        probe.close()
+    return None
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+
+    if args.transport == "streamable-http":
+        bind_error = check_port_free(args.http_host, args.http_port)
+        if bind_error:
+            # "MCP ERROR:" is parsed by startup GUIs; keep the prefix stable.
+            print(
+                f"MCP ERROR: http://{args.http_host}:{args.http_port} is already in use - "
+                f"another MCP server is likely still running with a different config. "
+                f"Stop it or choose a different port. ({bind_error})",
+                flush=True,
+            )
+            return 1
 
     server = MCPServer(
         name=args.name,
@@ -509,6 +658,7 @@ def main(argv: list[str] | None = None) -> int:
         tango_port=args.tango_port,
         blocked_classes=json.loads(args.blocked_classes_json),
         blocked_functions=json.loads(args.blocked_functions_json),
+        include_only_functions=json.loads(args.include_only_functions_json),
         data_device_address=args.data_device_address,
         verbose=not args.quiet,
     )

@@ -8,7 +8,7 @@
 # machine/IP. Set mcp.http_host to 0.0.0.0 when other machines need to connect.
 
 tango:
-  host: 127.0.0.1
+  host: localhost
   port: 9094
 
 mcp:
@@ -30,6 +30,12 @@ mcp:
   # commands. Entries may be "command" or "Class.command".
   # list_devices and get_data_from_key are always included.
   include_only_functions:
+    - DigitalTwin.acquire_camera_image
+    - DigitalTwin.acquire_scanned_data_advanced
+    - DigitalTwin.acquire_scanned_image
+    - DigitalTwin.acquire_spectrum
+    - DigitalTwin.place_beam
+    - DigitalTwin.place_beam_list
     - DigitalTwinDiffraction.acquire_camera_image
     - DigitalTwinDiffraction.acquire_scanned_data_advanced
     - DigitalTwinDiffraction.acquire_scanned_image

@@ -34,7 +34,7 @@ from startup_guis.qt_compat import (  # noqa: E402
 from startup_guis.shared import BODY_FONT, CONFIG_DIR, GENERATED_CONFIG_DIR, TITLE_FONT, CheckBox, CollapsibleSection, ManagedCommand, action_button, append_terminal_text, apply_theme, configure_splitter, configure_terminal, load_yaml, scrollable, section_label, write_yaml  # noqa: E402
 
 
-DEFAULT_CONFIG_PATH = CONFIG_DIR / 'Spectra300.yaml' 
+DEFAULT_CONFIG_PATH = CONFIG_DIR / 'DigitalTwin.yaml'
 GENERATED_CONFIG_PATH = GENERATED_CONFIG_DIR / 'server_gui.yaml' 
 DEVICE_MODULES = { 
     'aperture': 'asyncroscopy.instruments.electron_microscope.hardware.aperture_autoscript',

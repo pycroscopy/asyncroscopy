@@ -19,6 +19,7 @@ devices:
 tango:
   host: localhost
   port: 9094
+  reset_database_file: true
 
 tiled:
   host: localhost

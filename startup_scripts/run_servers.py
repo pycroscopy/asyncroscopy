@@ -402,6 +402,10 @@ def register_devices(devices: list[DeviceConfig], instrument_properties: dict[st
         device_info._class = device.class_name
         device_info.name = device.device_name
         database.add_device(device_info)
+        try:
+            database.unexport_server(device.server_name)
+        except Exception:
+            pass
         status_line("OK", device.device_name)
         for property_name, property_value in device.properties.items():
             database.put_device_property(device.device_name, {property_name: property_value})

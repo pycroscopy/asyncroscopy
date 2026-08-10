@@ -65,6 +65,7 @@ DARK_COLORS = {
     'text': '#e6edf3',
     'text_dim': '#8b98a5',
     'accent': '#58a6ff',
+    'danger': '#f85149',
     'check_mark': '#0b0f14',
     'terminal_bg': '#0b0f14',
     'terminal_text': '#c9d1d9',
@@ -79,6 +80,7 @@ LIGHT_COLORS = {
     'text': '#1f2328',
     'text_dim': '#59636e',
     'accent': '#0969da',
+    'danger': '#b42318',
     'check_mark': '#ffffff',
     # The terminal keeps its console-style dark background in both themes, so
     # output stays readable regardless of the surrounding chrome.
@@ -363,12 +365,20 @@ def tool_count_badge() -> QLabel:
     return label
 
 
-def set_tool_count_badge(label: QLabel, count: int | None) -> None:
-    """Update a tool_count_badge() label. Pass None to reset to the not-yet-known state."""
-    ready = count is not None
-    label.setText('no tools yet' if count is None else f'{count} tool{"" if count == 1 else "s"}')
-    color = COLORS['accent'] if ready else COLORS['text_dim']
-    border = COLORS['accent'] if ready else COLORS['border_strong']
+def set_tool_count_badge(label: QLabel, count: int | None, error: str | None = None) -> None:
+    """Update a tool_count_badge() label.
+
+    Pass None to reset to the not-yet-known state, or a short error string to
+    show a red failure state (e.g. 'port in use').
+    """
+    if error is not None:
+        label.setText(error)
+        color = border = COLORS['danger']
+    else:
+        ready = count is not None
+        label.setText('no tools yet' if count is None else f'{count} tool{"" if count == 1 else "s"}')
+        color = COLORS['accent'] if ready else COLORS['text_dim']
+        border = COLORS['accent'] if ready else COLORS['border_strong']
     label.setStyleSheet(
         'QLabel {'
         f'color: {color}; border: 1px solid {border}; border-radius: 9px;'
@@ -594,20 +604,32 @@ class ManagedCommand(QObject):
         threading.Thread(target=self._read_output, daemon=True).start()
 
     def stop(self) -> None:
+        """Immediately kill the managed process and every subprocess it spawned.
+
+        The startup scripts launch whole trees (uv -> python -> device servers,
+        Tiled, ...), so a polite terminate of the root leaves orphans holding
+        ports. Kill the full tree instead.
+        """
         if not self.running:
             self.output_ready.emit('No process is running.\n')
             return
         assert self.process is not None
         if os.name == 'nt':
-            self.process.terminate()
+            # /T walks the child tree, /F force-kills without waiting.
+            subprocess.run(
+                ['taskkill', '/PID', str(self.process.pid), '/T', '/F'],
+                capture_output=True,
+            )
         else:
             try:
-                os.killpg(self.process.pid, signal.SIGTERM)
+                # start_new_session=True in start() put the whole tree in one
+                # process group, so SIGKILL to the group takes everything down.
+                os.killpg(self.process.pid, signal.SIGKILL)
             except ProcessLookupError:
                 return
             except OSError:
-                self.process.terminate()
-        self.output_ready.emit('Stop requested.\n')
+                self.process.kill()
+        self.output_ready.emit('Killed process tree.\n')
 
     def _read_output(self) -> None:
         assert self.process is not None

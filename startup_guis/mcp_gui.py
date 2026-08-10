@@ -41,23 +41,36 @@ GENERATED_CONFIG_PATH = GENERATED_CONFIG_DIR / 'mcp_gui.yaml'
 # Matches the unconditional "MCP ready: N tool(s) registered" line mcp_server.py
 # prints once tool discovery finishes, even in quiet mode.
 TOOL_COUNT_PATTERN = re.compile(r'MCP ready: (\d+) tool')
+# Matches the fatal "MCP ERROR: ..." line mcp_server.py prints when it cannot
+# start (e.g. the port is already held by another server instance).
+MCP_ERROR_PATTERN = re.compile(r'MCP ERROR: (.+)')
+
+
+def parse_int_safe(val: str, default: int) -> int:
+    val_str = str(val).strip().rstrip('\\')
+    cleaned = re.sub(r'\D', '', val_str)
+    return int(cleaned) if cleaned else default
 
 
 def mcp_config_from_values(values: dict) -> dict:
     blocked_functions = yaml.safe_load(values['blocked_functions']) if values['blocked_functions'].strip() else {}
-    return {
-        'tango': {'host': values['tango_host'], 'port': int(values['tango_port'])},
+    include_only_raw = values.get('include_only_functions', '')
+    config = {
+        'tango': {'host': values['tango_host'], 'port': parse_int_safe(values['tango_port'], 9094)},
         'mcp': {
             'name': values['name'],
             'transport': values['transport'],
             'http_host': values['http_host'],
-            'http_port': int(values['http_port']),
+            'http_port': parse_int_safe(values['http_port'], 8000),
             'data_device_address': values['data_device_address'],
             'quiet': values['quiet'],
             'blocked_classes': [item.strip() for item in values['blocked_classes'].split(',') if item.strip()],
             'blocked_functions': blocked_functions or {},
         },
     }
+    if include_only_raw.strip():
+        config['mcp']['include_only_functions'] = [item.strip() for item in include_only_raw.split(',') if item.strip()]
+    return config
 
 
 class McpGui(QMainWindow):
@@ -67,9 +80,13 @@ class McpGui(QMainWindow):
         self.resize(1280, 960)
         self.setMinimumSize(880, 560)
         self.command = ManagedCommand(self.enqueue_output, self.process_done)
+        self.badge_error = False
         self.default_config = load_yaml(DEFAULT_CONFIG_PATH)
         self.inputs: dict[str, QLineEdit | QComboBox | QCheckBox] = {}
         self.build()
+        # Default to the digital twin regardless of what host the config file
+        # names, so a fresh launch never points at the real instrument.
+        self.apply_host_preset(DIGITAL_TWIN_HOST)
         self.refresh_yaml()
 
     def build(self) -> None:
@@ -149,6 +166,7 @@ class McpGui(QMainWindow):
 
         access_control = self.section('Access control', expanded=False)
         self.add_row(access_control, 'Blocked classes', self.line_input('blocked_classes', ', '.join(mcp.get('blocked_classes', []))))
+        self.add_row(access_control, 'Include only functions', self.line_input('include_only_functions', ', '.join(mcp.get('include_only_functions', []))))
         blocked_label = section_label('Blocked functions YAML')
         access_control.form.addRow(blocked_label)
         self.blocked_functions = QTextEdit()
@@ -236,6 +254,7 @@ class McpGui(QMainWindow):
             'data_device_address': self.inputs['data_device_address'].text(),
             'quiet': self.inputs['quiet'].isChecked(),
             'blocked_classes': self.inputs['blocked_classes'].text(),
+            'include_only_functions': self.inputs['include_only_functions'].text() if 'include_only_functions' in self.inputs else '',
             'blocked_functions': self.blocked_functions.toPlainText() if hasattr(self, 'blocked_functions') else '',
         }
         return mcp_config_from_values(values)
@@ -245,8 +264,8 @@ class McpGui(QMainWindow):
             return
         try:
             self.yaml_preview.setPlainText(yaml_text(self.current_config()))
-        except yaml.YAMLError as exc:
-            self.yaml_preview.setPlainText(f'Invalid blocked_functions YAML: {exc}')
+        except (ValueError, yaml.YAMLError) as exc:
+            self.yaml_preview.setPlainText(f'Invalid configuration values or YAML: {exc}')
 
     def save_config(self) -> None:
         path, _ = QFileDialog.getSaveFileName(self, 'Save config', str(CONFIG_DIR / 'mcp_config.yaml'), 'YAML (*.yaml *.yml);;All files (*)')
@@ -270,23 +289,36 @@ class McpGui(QMainWindow):
         self.inputs['data_device_address'].setText(mcp.get('data_device_address', 'asyncroscopy/data/default'))
         self.inputs['quiet'].setChecked(bool(mcp.get('quiet', True)))
         self.inputs['blocked_classes'].setText(', '.join(mcp.get('blocked_classes', [])))
+        if 'include_only_functions' in self.inputs:
+            self.inputs['include_only_functions'].setText(', '.join(mcp.get('include_only_functions', [])))
         self.blocked_functions.setPlainText(yaml.safe_dump(mcp.get('blocked_functions', {}), sort_keys=False))
         self.refresh_yaml()
         self.enqueue_output(f'Loaded {path}\n')
 
     def start(self) -> None:
+        self.badge_error = False
         set_tool_count_badge(self.tool_badge, None)
         config_path = write_yaml(GENERATED_CONFIG_PATH, self.current_config())
         self.command.start(['uv', 'run', 'python', '-u', 'startup_scripts/run_mcp.py', '--yaml', str(config_path)])
 
     def enqueue_output(self, text: str) -> None:
         append_terminal_text(self.output, text)
+        error_match = MCP_ERROR_PATTERN.search(text)
+        if error_match:
+            self.badge_error = True
+            message = error_match.group(1)
+            set_tool_count_badge(self.tool_badge, None, error='port in use' if 'in use' in message else 'server error')
+            return
         match = TOOL_COUNT_PATTERN.search(text)
         if match:
             set_tool_count_badge(self.tool_badge, int(match.group(1)))
 
     def process_done(self, returncode: int | None) -> None:
         self.enqueue_output(f'\nProcess exited with return code {returncode}.\n')
+        # A dead server serves no tools; drop any stale count but keep an error
+        # badge visible so the failure reason is not lost.
+        if not self.badge_error:
+            set_tool_count_badge(self.tool_badge, None)
 
 
 if __name__ == '__main__':
