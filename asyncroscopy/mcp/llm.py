@@ -22,7 +22,7 @@ from tango.server import Device, attribute, command, device_property
 try:
     from langchain.chat_models import init_chat_model
     from langchain_core.tools import BaseTool
-    from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
+    from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
     from langchain.agents import create_agent
     from langchain_mcp_adapters.client import MultiServerMCPClient
 
@@ -126,6 +126,15 @@ class LLM(Device):
         """Return a list of the names of all currently spawned agents."""
         return [agent.name for agent in self._agents]
 
+    @attribute(dtype=str)
+    def tools(self) -> str:
+        """JSON list of MCP tools inherited via ConnectMCP, e.g. [{"name": "..."}, ...].
+
+        Consumed by scripts/llm_bridge.py (in the sciagentgui repo) for its /health
+        endpoint and startup tool count.
+        """
+        return json.dumps([{"name": t.name} for t in self._tools])
+
     async def ensure_ollama_running(self, host: str = "http://localhost:11434", timeout: int = 10) -> None:
         """Check if Ollama server is running, offloaded to prevent blocking the Tango loop."""
         
@@ -171,6 +180,76 @@ class LLM(Device):
             return str(e)
         finally:
             self.set_state(tango.DevState.ON)
+
+    @command(
+        dtype_in=str,
+        doc_in="OpenAI-style {'messages': [...], 'tools': [...]}",
+        dtype_out=str,
+        doc_out="JSON {'message': {...}} on success, or {'error': {'message': ...}} on failure",
+    )
+    async def Complete(self, request_json: str) -> str:
+        """OpenAI-compatible single-step chat completion for the llm_bridge.py HTTP bridge.
+
+        Unlike Query, this does not run the LangGraph swarm or execute any tools
+        itself — it converts the request into one LangChain model call and returns
+        the model's raw decision (tool_calls or final text) so the caller (e.g.
+        SciAgentGUI's own agent loop) can execute tools and drive the conversation.
+        """
+        try:
+            request = json.loads(request_json)
+            messages = self._openai_messages_to_langchain(request.get("messages") or [])
+            tools = request.get("tools") or []
+            model = self._model.bind_tools(tools) if tools else self._model
+            response = await model.ainvoke(messages)
+            return json.dumps({"message": self._langchain_message_to_openai(response)})
+        except Exception as e:
+            return json.dumps({"error": {"message": str(e)}})
+
+    @staticmethod
+    def _openai_messages_to_langchain(messages: list[dict]) -> list[BaseMessage]:
+        """Convert OpenAI-style chat messages into LangChain message objects."""
+        converted: list[BaseMessage] = []
+        for message in messages:
+            role = message.get("role", "user")
+            content = message.get("content")
+            if role == "system":
+                converted.append(SystemMessage(content=content or ""))
+            elif role == "assistant":
+                tool_calls = [
+                    {
+                        "name": call["function"]["name"],
+                        "args": json.loads(call["function"].get("arguments") or "{}"),
+                        "id": call.get("id", ""),
+                    }
+                    for call in (message.get("tool_calls") or [])
+                ]
+                converted.append(AIMessage(content=content or "", tool_calls=tool_calls))
+            elif role == "tool":
+                converted.append(
+                    ToolMessage(content=content or "", tool_call_id=message.get("tool_call_id", ""))
+                )
+            else:
+                converted.append(HumanMessage(content=content or ""))
+        return converted
+
+    @staticmethod
+    def _langchain_message_to_openai(message: BaseMessage) -> dict:
+        """Convert a LangChain AIMessage into an OpenAI-style assistant message dict."""
+        result: dict = {"role": "assistant", "content": message.content or ""}
+        tool_calls = getattr(message, "tool_calls", None) or []
+        if tool_calls:
+            result["tool_calls"] = [
+                {
+                    "id": call.get("id") or f"call_{index}",
+                    "type": "function",
+                    "function": {
+                        "name": call["name"],
+                        "arguments": json.dumps(call.get("args") or {}),
+                    },
+                }
+                for index, call in enumerate(tool_calls)
+            ]
+        return result
 
     @command(
         dtype_in=str,

@@ -16,6 +16,7 @@ from tango import AttrWriteType, DevState
 from tango.server import Device, attribute, device_property
 
 from asyncroscopy.instruments.electron_microscope.electron_microscope import ElectronMicroscope
+from asyncroscopy.instruments.electron_microscope.detectors.camera import CAMERA
 from asyncroscopy.data.data_writer import save_acquisition
 
 DEFAULT_ACQUISITION_DIR = "outputs/tiled_acquisitions"
@@ -129,6 +130,7 @@ class DigitalTwin(ElectronMicroscope):
     def _connect_detector_proxies(self) -> None:
         """Build DeviceProxy objects for each configured detector device."""
         addresses: dict[str, str] = {
+            "camera": self.camera_device_address,
             "eds": self.eds_device_address,
             "stage": self.stage_device_address,
             "scan": self.scan_device_address,
@@ -529,6 +531,25 @@ class DigitalTwin(ElectronMicroscope):
             images.append(image)
         return save_acquisition(self, data_server, "stem_image", detector_list, images, output_format=output_format)
 
+    def _acquire_camera_image(
+        self,
+        imsize: int,
+        exposure_time: float,
+        detector: str,
+        readout_area: str,
+        frame_combining: int = 1,
+        electron_counting: bool = True,
+        output_format: str = ".h5",
+    ) -> str:
+        """Simulate a single-shot camera acquisition.
+
+        DigitalTwin only models STEM-probe imaging (see _render_stem_image), not a
+        separate TEM-mode camera; reuse the same HAADF renderer as
+        acquire_scanned_image so acquire_camera_image returns a usable fake image
+        instead of the "unsupported" error from the base ElectronMicroscope class.
+        """
+        return self._acquire_scanned_image(int(imsize), float(exposure_time), ["haadf"], [0.0, 0.0, 1.0, 1.0], output_format)
+
     def _simulate_spectrum(self, detector_name: str, exposure_time: float) -> dict[str, float]:
         """Simulate EDS spectrum acquisition at the current beam position weighted by surrounding particles."""
         self._sync_stage_from_proxy()
@@ -633,6 +654,35 @@ class DigitalTwin(ElectronMicroscope):
 
         self._stage_position = target
         self._update_view_cache(force=False)
+
+    def _get_parameters(self) -> str:
+        """Return all simulated status parameters as a JSON string.
+
+        The base class exposes this through the get_parameters Tango command,
+        which is typed DevString — returning a dict (or the inherited abstract
+        stub's None) makes the command fail with a Tango translation error.
+
+        The detector keys are deliberately split by what they mean: device_proxies
+        are the twin's connected settings devices (scan, stage, data, ... — not
+        detectors), scan_detectors is what the twin's STEM renderer actually
+        produces (a simulated HAADF signal, whatever label is requested),
+        spectrum_detectors is what acquire_spectrum accepts, and camera_detectors
+        are the names the CAMERA device validates writes against. An earlier
+        draft published the proxy keys under a "detectors" key, which told an
+        agent that "stage" and "data" were detectors it could scan with.
+        """
+        self._sync_stage_from_proxy()
+        parameters = {
+            "manufacturer": self._manufacturer,
+            "stem_mode": bool(self._stem_mode),
+            "defocus_m": float(self._defocus),
+            "device_proxies": sorted(self._detector_proxies.keys()),
+            "scan_detectors": ["haadf"],
+            "spectrum_detectors": ["eds"],
+            "camera_detectors": sorted(CAMERA._CAMERA_DETECTORS),
+            **self._viewport_metadata(),
+        }
+        return json.dumps(parameters)
 
     def get_viewport_metadata(self) -> str:
         """Return JSON-formatted metadata regarding the current simulation viewport and environment state."""

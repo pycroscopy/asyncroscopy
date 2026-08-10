@@ -81,7 +81,10 @@ class ElectronMicroscope(Instrument):
 
     @abstractmethod
     def _connect(self):
-        pass
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement _connect; "
+            "this vendor backend is missing the override"
+        )
 
     def _disconnect(self):
         self._microscope = None
@@ -89,11 +92,17 @@ class ElectronMicroscope(Instrument):
 
     @abstractmethod
     def _connect_hardware(self) -> None:
-        pass
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement _connect_hardware; "
+            "this vendor backend is missing the override"
+        )
 
     @abstractmethod
     def _connect_detector_proxies(self) -> None:
-        pass
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement _connect_detector_proxies; "
+            "this vendor backend is missing the override"
+        )
 
     def read_stem_mode(self) -> bool:
         return self._stem_mode
@@ -104,14 +113,30 @@ class ElectronMicroscope(Instrument):
         self.set_state(DevState.OFF)
         self._disconnect()
 
-    @command(dtype_in=str, dtype_out=str)
+    @command(
+        dtype_in=str,
+        dtype_out=str,
+        doc_in=":param detector_name: Spectrum detector name, e.g. 'eds'.",
+    )
     def acquire_spectrum(self, detector_name: str) -> str:
         """Acquire a single spectrum and return its DATA/Tiled unique id."""
         detector_name = detector_name.lower().strip()
         proxy = self._detector_proxies.get(detector_name)
+        if proxy is None:
+            tango.Except.throw_exception(
+                'UnknownDetector',
+                f"No spectrum detector named '{detector_name}'. "
+                f"Configured detector devices: {sorted(self._detector_proxies.keys())}.",
+                'acquire_spectrum()',
+            )
         return self._acquire_spectrum(detector_name, proxy.exposure_time)
 
-    @command(dtype_in=DevVarStringArray, dtype_out=str)
+    @command(
+        dtype_in=DevVarStringArray,
+        dtype_out=str,
+        doc_in=":param detector_list: Scanning detector names, e.g. ['haadf']. "
+               "An empty list uses ['haadf'].",
+    )
     def acquire_scanned_image(self, detector_list: list[str] = ['haadf']) -> str:
         """
         Acquire an image with scanning detectors and return its DATA/Tiled key.
@@ -291,7 +316,10 @@ class ElectronMicroscope(Instrument):
         output_format: str = '.h5',
     ) -> str:
         """Vendor-specific scanned image acquisition implementation."""
-        pass
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement _acquire_scanned_image; "
+            "this vendor backend is missing the override"
+        )
 
     def _acquire_camera_image(
         self,
@@ -332,71 +360,122 @@ class ElectronMicroscope(Instrument):
 
     @abstractmethod
     def _get_defocus(self):
-        pass
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement _get_defocus; "
+            "this vendor backend is missing the override"
+        )
 
     @abstractmethod
     def _set_screen(self, position):
-        pass
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement _set_screen; "
+            "this vendor backend is missing the override"
+        )
 
     @abstractmethod
     def _set_screen_current(self, current):
-        pass
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement _set_screen_current; "
+            "this vendor backend is missing the override"
+        )
     
     @abstractmethod
     def _calibrate_screen_current(self):
-        pass
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement _calibrate_screen_current; "
+            "this vendor backend is missing the override"
+        )
 
     @abstractmethod
     def _get_screen_current(self):
-        pass
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement _get_screen_current; "
+            "this vendor backend is missing the override"
+        )
 
     @abstractmethod
     def _move_stage(self, position):
-        pass
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement _move_stage; "
+            "this vendor backend is missing the override"
+        )
 
     @abstractmethod
     def _get_stage(self):
-        pass
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement _get_stage; "
+            "this vendor backend is missing the override"
+        )
 
     @abstractmethod
     def _get_image_shift(self):
-        pass
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement _get_image_shift; "
+            "this vendor backend is missing the override"
+        )
 
     @abstractmethod
     def _get_beam_tilt(self):
-        pass
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement _get_beam_tilt; "
+            "this vendor backend is missing the override"
+        )
 
     @abstractmethod
     def _set_beam_tilt(self,tilt):
-        pass
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement _set_beam_tilt; "
+            "this vendor backend is missing the override"
+        )
 
     @abstractmethod
     def _get_diffraction_shift(self):
-        pass
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement _get_diffraction_shift; "
+            "this vendor backend is missing the override"
+        )
 
     @abstractmethod
     def _set_diffraction_shift(self, tilt):
-        pass
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement _set_diffraction_shift; "
+            "this vendor backend is missing the override"
+        )
 
     @abstractmethod
     def _get_parameters(self):
-        pass
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement _get_parameters; "
+            "this vendor backend is missing the override"
+        )
 
     @abstractmethod
     def _set_fov(self, fov):
-        pass
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement _set_fov; "
+            "this vendor backend is missing the override"
+        )
 
     @abstractmethod
     def _get_fov(self):
-        pass
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement _get_fov; "
+            "this vendor backend is missing the override"
+        )
 
     @abstractmethod
     def _auto_focus(self):
-        pass
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement _auto_focus; "
+            "this vendor backend is missing the override"
+        )
 
     @abstractmethod
     def _set_image_shift(self, shift):
-        pass
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement _set_image_shift; "
+            "this vendor backend is missing the override"
+        )
 
 
 if __name__ == '__main__':

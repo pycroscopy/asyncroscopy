@@ -231,28 +231,30 @@ class MCPServer:
         image.save(buffer, format="PNG")
         return buffer.getvalue()
 
-    def _fetch_image_preview(self, key: str) -> MCPImage | None:
+    def _fetch_image_preview(self, key: str) -> tuple[MCPImage | None, str | None]:
         """Fetch a captured image from Tiled and render it as a PNG preview.
 
-        Returns None instead of raising on any failure (unreachable Tiled server,
-        key not yet registered, no 2D dataset found) so the acquisition tool can
-        still return its text key even when a preview can't be built.
+        Returns (preview, None) on success and (None, reason) on any failure
+        (unreachable Tiled server, key not yet registered, no 2D dataset found),
+        so the acquisition tool can still return its text key and state why no
+        preview accompanies it. Swallowing the reason made a Tiled outage
+        indistinguishable from a command that never produces images.
         """
         try:
             data = DeviceProxy(self.data_device_address)
             config = json.loads(data.get_config())
             uri = config.get("uri")
             if not uri:
-                return None
+                return None, "the DATA device's config carries no Tiled uri"
             node = from_uri(uri)[key]
             array = self._find_first_2d_array(node, prefer_key="image")
             if array is None:
-                return None
-            return MCPImage(data=self._array_to_png_bytes(array), format="png")
+                return None, f"no 2D dataset was found under key {key!r} in Tiled"
+            return MCPImage(data=self._array_to_png_bytes(array), format="png"), None
         except Exception as exc:
             if self.verbose:
                 print(f"[image preview] could not build preview for {key!r}: {exc}")
-            return None
+            return None, f"{type(exc).__name__}: {exc}"
 
     def _augment_with_preview(self, command_name: str, result: Any) -> Any:
         """Attach an inline image preview to known acquisition commands.
@@ -261,13 +263,18 @@ class MCPServer:
         unchanged for existing callers) and an image content block, plus
         structured_content matching the tool's auto-generated {"result": str}
         output schema — a bare (text, Image) tuple would leave structured_content
-        empty and fail client-side output-schema validation.
+        empty and fail client-side output-schema validation. When the preview
+        cannot be built, a text block states the reason instead of the image, so
+        the failure is visible to the operator and the model rather than silent.
         """
         if command_name not in IMAGE_PREVIEW_COMMANDS or not isinstance(result, str) or not result:
             return result
-        preview = self._fetch_image_preview(result)
+        preview, failure = self._fetch_image_preview(result)
         if preview is None:
-            return result
+            return ToolResult(
+                content=[result, f"image preview unavailable: {failure}"],
+                structured_content={"result": result},
+            )
         return ToolResult(content=[result, preview], structured_content={"result": result})
 
     @staticmethod
