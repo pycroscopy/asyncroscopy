@@ -17,6 +17,51 @@ from asyncroscopy.instruments.scanning_probe_microscope.hardware.spm_feedback im
 from asyncroscopy.instruments.scanning_probe_microscope.hardware.spm_approach import SPM_APPROACH
 from asyncroscopy.instruments.scanning_probe_microscope.hardware.spm_stage import SPM_STAGE
 
+import threading
+
+import numpy as np
+import tango
+import tango.server
+
+
+try:
+    from aespm import read_spm
+
+    _AESPM_AVAILABLE = True
+    _AESPM_IMPORT_ERROR = ""
+except Exception as exc:
+    _AESPM_AVAILABLE = False
+    _AESPM_IMPORT_ERROR = f"{type(exc).__name__}: {exc}"
+
+_IGOR_LOCK = threading.RLock()
+
+def _read(keys: list[str]) -> list[float]:
+    """Read AR global variables by name in a single Igor round trip.
+
+    read_spm builds one Igor wave for the whole list, so batching is much cheaper
+    than reading keys individually. np.atleast_1d guards the single-key case,
+    where np.loadtxt returns a 0-d array.
+    """
+    if not _AESPM_AVAILABLE:
+        tango.Except.throw_exception(
+            "AespmNotAvailable",
+            "aespm could not be imported, so the Jupiter is unreachable: "
+            f"{_AESPM_IMPORT_ERROR}. This device server must run on the Jupiter "
+            "control PC with the Asylum Research software installed.",
+            "jupiter_api._read()",
+        )
+    with _IGOR_LOCK:
+        values = read_spm(key=list(keys), connection=None)
+    return [float(value) for value in np.atleast_1d(values)]
+
+_SCAN_PARAM_KEYS: dict[str, str] = {
+    "x_scan_center_m": "XOffset",
+    "y_scan_center_m": "YOffset",
+    "scan_size_m": "ScanSize",
+    "scan_size_px": "ScanLines",
+    "scan_angle_deg": "ScanAngle",
+    "scan_rate_hz": "ScanRate",
+}
 
 class JupiterMicroscope(SPMMicroscope):
     """Top-level Jupiter AFM device: vendor connection and instrument-global state."""
@@ -41,7 +86,24 @@ class SCAN_Jupiter(SPM_SCAN):
         """Read all scan parameters from AR; keys must match the attribute names
         (x_scan_center_m, y_scan_center_m, scan_size_m, scan_size_px,
         scan_angle_deg, scan_rate_hz)."""
-        ...
+        names = list(_SCAN_PARAM_KEYS)
+        values = _read([_SCAN_PARAM_KEYS[name] for name in names])
+        params = dict(zip(names, values))
+
+        # A wrong key name can leave GV() failing inside Igor while readout.txt
+        # keeps its previous contents, so bad names surface as NaN or as stale
+        # values rather than as an error. NaN is the case we can actually catch.
+        invalid = [name for name, value in params.items() if not np.isfinite(value)]
+        if invalid:
+            tango.Except.throw_exception(
+                "ScanParameterUnreadable",
+                "AR returned no finite value for: "
+                + ", ".join(f"{name} (GV '{_SCAN_PARAM_KEYS[name]}')" for name in invalid),
+                "_hw_read_scan_params()",
+            )
+
+        params["scan_size_px"] = int(round(params["scan_size_px"]))
+        return params
 
     def _hw_write_scan_param(self, name: str, value) -> None:
         """Push one scan parameter to AR (name as in _hw_read_scan_params);
@@ -125,3 +187,31 @@ class STAGE_Jupiter(SPM_STAGE):
     def _hw_stop(self) -> None:
         """Abort any running stage motion immediately."""
         ...
+
+# ----------------------------------------------------------------------
+# Server entry point
+# ----------------------------------------------------------------------
+# run_servers.py starts one process per device with
+# `python -m ...jupiter_api <key>_instance`, and Device.run_server() uses the
+# class name as the Tango server name, so the class is selected here from the
+# instance name the process was launched with.
+_DEVICE_CLASSES = {
+    "instrument": JupiterMicroscope,
+    "scan": SCAN_Jupiter,
+    "feedback": FEEDBACK_Jupiter,
+    "approach": APPROACH_Jupiter,
+    "stage": STAGE_Jupiter,
+}
+
+if __name__ == "__main__":
+    import sys
+
+    instance = sys.argv[1] if len(sys.argv) > 1 else ""
+    key = instance.rsplit("_instance", 1)[0]
+    device_class = _DEVICE_CLASSES.get(key)
+    if device_class is None:
+        raise SystemExit(
+            f"Cannot pick a device class from instance name {instance!r}. "
+            f"Expected one of: {', '.join(f'{k}_instance' for k in _DEVICE_CLASSES)}"
+        )
+    device_class.run_server()

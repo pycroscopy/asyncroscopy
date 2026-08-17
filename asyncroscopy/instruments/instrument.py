@@ -5,6 +5,7 @@ from typing import Optional
 from abc import abstractmethod, ABCMeta
 
 import tango
+import tango.server
 
 class CombinedMeta(tango.server.DeviceMeta, ABCMeta):
     """Combines Tango DeviceMeta and ABCMeta to allow abstract methods in Devices."""

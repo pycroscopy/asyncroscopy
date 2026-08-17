@@ -62,6 +62,10 @@ agent = [
     "langchain-mcp-adapters",    
 ]
 
+jupiter = [
+    "aespm>=1.1.4",
+]
+
 ollama = [
     "langchain_ollama"
 ]
@@ -78,3 +82,8 @@ autoscript-tem-microscope-client = { path = "stubs/AutoScript_v_1.17/autoscript_
 autoscript-tem-toolkit = { path = "stubs/AutoScript_v_1.17/autoscript_tem_toolkit-1.17.0-py3-none-any.whl" }
 thermoscientific-logging = { path = "stubs/AutoScript_v_1.17/thermoscientific_logging-1.3.0-py3-none-any.whl" }
 pyjem = { path = "stubs/PyJEM_v_1.3.0.3564/PyJEM-1.3.0.3564-py3-none-any.whl" }
+
+[tool.uv]
+override-dependencies = [
+    { package = { name = "aespm" }, dependencies = ["numpy>=2.3.5"] },
+]

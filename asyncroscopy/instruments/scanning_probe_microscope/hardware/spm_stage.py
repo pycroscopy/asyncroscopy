@@ -17,7 +17,7 @@ class SPM_STAGE(tango.server.Device, metaclass=CombinedMeta):
     # Attributes
     # ------------------------------------------------------------------
     
-    stage_x = tango.server.attribute(
+    stage_x_m = tango.server.attribute(
         label="Stage X Position",
         dtype=float,
         access=tango.AttrWriteType.READ,
@@ -26,7 +26,7 @@ class SPM_STAGE(tango.server.Device, metaclass=CombinedMeta):
         doc="Current stage X position in meters. Read live from hardware.",
     )
 
-    stage_y = tango.server.attribute(
+    stage_y_m = tango.server.attribute(
         label="Stage Y Position",
         dtype=float,
         access=tango.AttrWriteType.READ,
@@ -61,6 +61,16 @@ class SPM_STAGE(tango.server.Device, metaclass=CombinedMeta):
             self._hw_move_stage_relative(dx, dy)
         finally:
             self.set_state(tango.DevState.ON)
+
+    # ------------------------------------------------------------------
+    # Attribute read — live from hardware
+    # ------------------------------------------------------------------
+
+    def read_stage_x_m(self) -> float:
+        return self._hw_read_stage_position()[0]
+
+    def read_stage_y_m(self) -> float:
+        return self._hw_read_stage_position()[1]
 
     # ------------------------------------------------------------------
     # Commands

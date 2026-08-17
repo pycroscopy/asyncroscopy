@@ -237,7 +237,7 @@ class SPMMicroscope(Instrument):
         """
         proxy = self._get_proxy('stage')
         proxy.move_stage(position)
-        return [proxy.stage_x, proxy.stage_y]
+        return [proxy.stage_x_m, proxy.stage_y_m]
     
     @tango.server.command(dtype_in=tango.DevVarDoubleArray, dtype_out=tango.DevVarDoubleArray)
     def move_probe(self, position) -> list[float]:

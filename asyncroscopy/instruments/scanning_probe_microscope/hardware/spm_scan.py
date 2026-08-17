@@ -17,6 +17,15 @@ import tango #type: ignore
 from asyncroscopy.data.data_writer import save_acquisition
 from asyncroscopy.instruments.instrument import CombinedMeta
 
+_PARAM_DEFAULTS = {
+        "x_scan_center_m": float("nan"),
+        "y_scan_center_m": float("nan"),
+        "scan_size_m": float("nan"),
+        "scan_size_px": 0,
+        "scan_angle_deg": float("nan"),
+        "scan_rate_hz": float("nan"),
+    }
+
 class SPM_SCAN(tango.server.Device, metaclass=CombinedMeta):
     """Abstract SPM scan device: frame settings + scan execution."""
 
@@ -116,23 +125,48 @@ class SPM_SCAN(tango.server.Device, metaclass=CombinedMeta):
             tango.DeviceProxy(self.data_device_address)
             if self.data_device_address else None
         )
-        self._refresh_params()
-        self.set_state(tango.DevState.ON)
+
+        for name, value in _PARAM_DEFAULTS.items():
+            setattr(self, f"_{name}", value)
+            
+        try:
+            self._refresh_params()
+        except Exception:
+            return
+        self._set_state_and_status(tango.DevState.ON, "Idle.")
         self.info_stream("SPM SCAN device initialised")
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
+    def _set_state_and_status(self, state, status: str) -> None:
+        """Set State and Status together.
+        """
+        self.set_state(state)
+        self.set_status(status)
+
     def _refresh_params(self) -> None:
         """Re-read all scan parameters from hardware into local fields."""
-        params = self._hw_read_scan_params()
+        try:
+            params = self._hw_read_scan_params()
+        except Exception as exc:
+            reason = exc.args[0].desc if isinstance(exc, tango.DevFailed) and exc.args else str(exc)
+            self._set_state_and_status(
+                tango.DevState.FAULT,
+                "Could not read scan parameters from hardware.\n" + str(reason),
+            )
+            raise
+
         self._x_scan_center_m: float = params["x_scan_center_m"]
         self._y_scan_center_m: float = params["y_scan_center_m"]
         self._scan_size_m: float = params["scan_size_m"]
         self._scan_size_px: int = params["scan_size_px"]
         self._scan_angle_deg: float = params["scan_angle_deg"]
         self._scan_rate_hz: float = params["scan_rate_hz"]
+
+        if self.get_state() == tango.DevState.FAULT:
+            self._set_state_and_status(tango.DevState.ON, "Idle.")
 
     def _write_param(self, name: str, value) -> None:
         """Push one parameter to hardware, then re-read all (hardware may coerce/couple values)."""
@@ -165,11 +199,11 @@ class SPM_SCAN(tango.server.Device, metaclass=CombinedMeta):
                 "A probe move is already running.",
                 "move_probe()",
             )
-        self.set_state(tango.DevState.MOVING)
+        self._set_state_and_status(tango.DevState.MOVING, "Moving the probe.")
         try:
             self._hw_move_probe(x, y)
         finally:
-            self.set_state(tango.DevState.ON)
+            self._set_state_and_status(tango.DevState.ON, "Idle.")
 
     # ------------------------------------------------------------------
     # Attribute read / write, writes pushed to hardware
@@ -240,11 +274,11 @@ class SPM_SCAN(tango.server.Device, metaclass=CombinedMeta):
                 "A scan is already running",
                 "acquire_scan()",
             )
-        self.set_state(tango.DevState.RUNNING)
+        self._set_state_and_status(tango.DevState.RUNNING, "Acquiring a scan frame.")
         try:
             channel_names, data = self._hw_acquire_scan()
         finally:
-            self.set_state(tango.DevState.ON)
+            self._set_state_and_status(tango.DevState.ON, "Idle.")
         return save_acquisition(
             self, self._data_proxy, "spm_scan", channel_names, data,
             dataset_attrs=[self._scan_metadata()] * len(channel_names),
@@ -254,7 +288,7 @@ class SPM_SCAN(tango.server.Device, metaclass=CombinedMeta):
     def stop_scan(self) -> None:
         """Stop a running scan."""
         self._hw_stop_scan()
-        self.set_state(tango.DevState.ON)
+        self._set_state_and_status(tango.DevState.ON, "Idle.")
 
     @tango.server.command
     def refresh_params(self) -> None:
