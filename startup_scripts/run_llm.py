@@ -1,3 +1,4 @@
+from typing import Literal
 import json
 import sys
 import argparse
@@ -28,24 +29,23 @@ class TangoConfig:
     port: int
 
 @dataclass
+class MCPConfig:
+    url: str | None = None
+    transport: Literal["stdio", "http", "sse", "streamable-http"] = "streamable-http"
+
+@dataclass
 class LLMConfig:
     tango: TangoConfig
-    mcp_url: str
-    local_model_path: str | None = None
-    model_provider: str | None = None
-    model_name: str | None = None
+    mcp_config: MCPConfig
+    
+    chat_model_name: str | None = None
     api_key: str | None = None
+    api_base: str | None = None
+
+    ollama_model: str | None = None
+    auto_pull_model: bool = True
+
     startup_agents: list[Agent] | None = None
-
-    def __post_init__(self):
-        # Convert tango dict to TangoConfig
-        if isinstance(self.tango, dict):
-            self.tango = TangoConfig(**self.tango)
-
-def _require(mapping: dict, key: str, where: str):
-    if not isinstance(mapping, dict) or key not in mapping:
-        raise KeyError(f"Config section '{where}' is missing required key '{key}'")
-    return mapping[key]
 
 
 def load_config(path: Path) -> LLMConfig:
@@ -73,6 +73,8 @@ def register_device(config: LLMConfig | None):
                 properties[key] = value
                 if key == "startup_agents":
                     properties[key] = [json.dumps(agent) for agent in value]
+                elif key == "mcp_config":
+                    properties[key] = json.dumps(value)
         
         database.put_device_property(DEVICE_NAME, properties)
         print(f"Set device properties: {properties}")
@@ -91,12 +93,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f'Config error: {exc}', file=sys.stderr)
         return 1
 
-    tango_host = f'{config.tango.host}:{config.tango.port}'
+    tango_host = f'{config.tango["host"]}:{config.tango["port"]}'
     os.environ['TANGO_HOST'] = tango_host
 
     register_device(config)
     
-    command = ["uv", "run", "python", "-m", "asyncroscopy.mcp.llm", INSTANCE_NAME]
+    command = [sys.executable, "-m", "asyncroscopy.mcp.llm", INSTANCE_NAME]
     env = {**os.environ, 'TANGO_HOST': tango_host, 'PYTHONUNBUFFERED': '1'}
 
     try:

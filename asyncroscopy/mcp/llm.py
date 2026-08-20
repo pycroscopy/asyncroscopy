@@ -51,11 +51,21 @@ class AgentState(TypedDict):
 
 
 class LLM(Device):
-    mcp_url = device_property(dtype=str, default_value="http://127.0.0.1:8000/mcp")
-    startup_agents = device_property(dtype=(str,), default_value=())
-    ollama_model = device_property(dtype=str, default_value="gemma4:31b")
-    use_init_chat_model = device_property(dtype=bool, default_value=False)
-    model_provider = device_property(dtype=str, default_value="ollama")
+    mcp_config = device_property(dtype=str, doc="JSON-serialized config of the MCP server to initially connect to: {'url': '...', 'transport': '...'}.")
+    startup_agents = device_property(dtype=(str,), default_value=(), doc="List of JSON-serialized Agent configs to spawn on startup.")
+
+    # Provider selection
+    use_init_chat_model = device_property(dtype=bool, default_value=False, doc="If true, use the init_chat_model function to initialize the LLM.")
+    model_provider = device_property(dtype=str, default_value="ollama", doc="The model provider to use for the LLM. Options: 'ollama', 'openai', etc.")
+    
+    # Generic init_chat_model config
+    chat_model_name = device_property(dtype=str, default_value="gpt-4o", doc="The name of the chat model to use for the LLM")
+    api_key = device_property(dtype=str, default_value="", doc="The API key for the model provider")
+    api_base = device_property(dtype=str, default_value="", doc="The base URL for the API")
+    
+    # Ollama config 
+    ollama_model = device_property(dtype=str, default_value="gemma4:31b", doc="The Ollama model ID to use for the LLM")
+    auto_pull_model = device_property(dtype=bool, default_value=True, doc="If true, automatically pull the Ollama model if it is not already downloaded.")
 
     max_steps = attribute(label="Max Steps", dtype=int, access=tango.AttrWriteType.READ_WRITE)
 
@@ -69,7 +79,9 @@ class LLM(Device):
         # Registries
         self._agents: list[Agent] = []
         self._tools: list[BaseTool] = []
-        self._mcp_clients: list[MultiServerMCPClient] = []
+
+        # Manages MCP connections
+        self._mcp_client = MultiServerMCPClient({})
 
         if self.startup_agents:
             self._agents = [Agent(**json.loads(agent_json)) for agent_json in self.startup_agents]
@@ -81,17 +93,23 @@ class LLM(Device):
 
             if self.use_init_chat_model: # Initialize from most model providers (e.g., OpenAI)
                 self.info_stream("Initializing via init_chat_model")
-                self._model = init_chat_model(
-                    model=self.ollama_model,
-                    model_provider=self.model_provider,
-                    temperature=0
-                )
+
+                model_kwargs = {
+                    "model": self.chat_model_name,
+                    "model_provider": self.model_provider
+                }
+                if self.api_key:
+                    model_kwargs["api_key"] = self.api_key
+                if self.api_base:
+                    model_kwargs["api_base"] = self.api_base
+
+                self._model = init_chat_model(**model_kwargs)
             else: # Initialize locally via Ollama
                 from langchain_ollama import ChatOllama
                 self.info_stream("Initializing via ChatOllama")
                 self._model = ChatOllama(
                     model=self.ollama_model,
-                    temperature=0,
+                    temperature=0.7,
                     reasoning=False,
                 )
 
@@ -102,10 +120,9 @@ class LLM(Device):
             print(f"[SYSTEM]: Model pre-warmed in {time.time() - start_warmup:.2f}s!")
 
             # Connect to an MCP server initially if specified
-            if self.mcp_url:
-                config = json.dumps({"url": self.mcp_url, "transport": "streamable_http"})
-                if not await self.ConnectMCP(config):
-                    print(f"[SYSTEM]: Failed to connect to MCP Server at {self.mcp_url}.")
+            if self.mcp_config:
+                if not await self.ConnectMCP(self.mcp_config):
+                    print(f"[SYSTEM]: Failed to connect to MCP Server: {self.mcp_config}.")
 
             self.set_state(tango.DevState.ON)
         except Exception as e:
@@ -126,8 +143,12 @@ class LLM(Device):
         """Return a list of the names of all currently spawned agents."""
         return [agent.name for agent in self._agents]
 
+    @attribute(dtype=str)
+    def mcp_connections(self) -> str:
+        return str(self._mcp_client.connections)
+
     async def ensure_ollama_running(self, host: str = "http://localhost:11434", timeout: int = 10) -> None:
-        """Check if Ollama server is running, offloaded to prevent blocking the Tango loop."""
+        """Check if Ollama server is running, starting it and downloading the model if necessary."""
         
         def _sync_check():
             tags_url = f"{host.rstrip('/')}/api/tags"
@@ -136,8 +157,19 @@ class LLM(Device):
                     return
             except (urllib.error.URLError, TimeoutError, ConnectionRefusedError):
                 pass
+            
+            if self.auto_pull_model: # Run command to download the model if it is not already
+                print(f"[SYSTEM]: Ensuring model '{self.ollama_model}' is pulled (this may take a while if it is not already downloaded)...")
+                try:
+                    subprocess.run(
+                        ["ollama", "pull", self.ollama_model], 
+                        check=True, 
+                        stderr=subprocess.DEVNULL
+                    )
+                except subprocess.CalledProcessError as e:
+                    raise RuntimeError(f"Failed to pull Ollama model {self.ollama_model}: {e}")
 
-            try:
+            try: # Run command to serve the model
                 subprocess.Popen(
                     ["ollama", "serve"],
                     stdout=subprocess.DEVNULL,
@@ -182,19 +214,16 @@ class LLM(Device):
         """Connect to an MCP server and inherit its tools. Returns true for success."""
         try:
             args = json.loads(config)
-            url = args.get("url")
-            transport = args.get("transport", "streamable_http")
 
-            server_id = f"server_{len(self._mcp_clients)}"
-            client = MultiServerMCPClient({server_id: {"url": url, "transport": transport}})
+            # Generate unique ID for this connection and add it to the client
+            server_id = f"server_{len(self._mcp_client.connections)}"
+            self._mcp_client.connections[server_id] = args
 
-            print(f"\n[SYSTEM]: Connecting to MCP Server at {url}...")
+            print(f"\n[SYSTEM]: Added MCP server {server_id}. Fetching tools...")
 
-            tools = await client.get_tools()
+            self._tools = await self._mcp_client.get_tools()
 
-            self._mcp_clients.append(client)
-            self._tools.extend(tools)
-            print(f"[SYSTEM]: Connected. Inherited {len(tools)} tools.")
+            print(f"[SYSTEM]: Connected. Inherited {len(self._tools)} tools.")
         except Exception as e:
             self.error_stream(f"Failed to connect to MCP server: {e}")
             return False
@@ -245,7 +274,7 @@ class LLM(Device):
         return text.strip()
 
     def _parse_routing_decision(self, content: str, valid_options: list[str], fallback: str) -> tuple[str, str]:
-        """Parse a supervisor response's {'next': ...} decision, falling back on any error or invalid value."""
+        """Parse a supervisor response's {'next': ...} decision with a fallback."""
         try:
             decision = json.loads(self._extract_json(content))
             next_agent = decision.get("next", fallback)
