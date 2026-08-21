@@ -26,6 +26,16 @@ def setup_llm_stubs():
     system_msg_cls = type("SystemMessage", (base_msg_cls,), {
         "__init__": lambda self, content: setattr(self, "content", content),
     })
+    ai_msg_cls = type("AIMessage", (base_msg_cls,), {
+        "__init__": lambda self, content, tool_calls=None: (
+            setattr(self, "content", content) or setattr(self, "tool_calls", tool_calls or [])
+        ),
+    })
+    tool_msg_cls = type("ToolMessage", (base_msg_cls,), {
+        "__init__": lambda self, content, tool_call_id=None: (
+            setattr(self, "content", content) or setattr(self, "tool_call_id", tool_call_id)
+        ),
+    })
 
     langchain_core = types.ModuleType("langchain_core")
     lc_tools = types.ModuleType("langchain_core.tools")
@@ -34,6 +44,8 @@ def setup_llm_stubs():
     lc_messages.BaseMessage = base_msg_cls
     lc_messages.HumanMessage = human_msg_cls
     lc_messages.SystemMessage = system_msg_cls
+    lc_messages.AIMessage = ai_msg_cls
+    lc_messages.ToolMessage = tool_msg_cls
     langchain_core.tools = lc_tools
     langchain_core.messages = lc_messages
 
@@ -75,6 +87,7 @@ def setup_llm_stubs():
 setup_llm_stubs()
 
 from asyncroscopy.mcp.llm import Agent, LLM
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
 
 # ---------------------------------------------------------------------------
@@ -322,3 +335,118 @@ class TestRunSwarm:
         asyncio.run(device._run_swarm("scan now"))
         assert len(captured_messages) == 1
         assert captured_messages[0].content == "scan now"
+
+
+class TestOpenAIMessagesToLangchain:
+    def test_user_message_becomes_human_message(self):
+        [msg] = LLM._openai_messages_to_langchain([{"role": "user", "content": "hi"}])
+        assert isinstance(msg, HumanMessage)
+        assert msg.content == "hi"
+
+    def test_system_message_becomes_system_message(self):
+        [msg] = LLM._openai_messages_to_langchain([{"role": "system", "content": "be careful"}])
+        assert isinstance(msg, SystemMessage)
+        assert msg.content == "be careful"
+
+    def test_assistant_message_without_tool_calls(self):
+        [msg] = LLM._openai_messages_to_langchain([{"role": "assistant", "content": "done"}])
+        assert isinstance(msg, AIMessage)
+        assert msg.content == "done"
+        assert msg.tool_calls == []
+
+    def test_assistant_message_with_tool_calls_parses_arguments(self):
+        [msg] = LLM._openai_messages_to_langchain([{
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "acquire_image", "arguments": '{"detector": "haadf"}'},
+            }],
+        }])
+        assert isinstance(msg, AIMessage)
+        assert msg.tool_calls == [{"name": "acquire_image", "args": {"detector": "haadf"}, "id": "call_1"}]
+
+    def test_tool_message_becomes_tool_message(self):
+        [msg] = LLM._openai_messages_to_langchain([{
+            "role": "tool", "tool_call_id": "call_1", "content": "stem_image_HAADF_x.h5",
+        }])
+        assert isinstance(msg, ToolMessage)
+        assert msg.content == "stem_image_HAADF_x.h5"
+        assert msg.tool_call_id == "call_1"
+
+    def test_unknown_role_falls_back_to_human_message(self):
+        [msg] = LLM._openai_messages_to_langchain([{"role": "weird", "content": "??"}])
+        assert isinstance(msg, HumanMessage)
+
+    def test_missing_content_defaults_to_empty_string(self):
+        [msg] = LLM._openai_messages_to_langchain([{"role": "user"}])
+        assert msg.content == ""
+
+
+class TestLangchainMessageToOpenAI:
+    def test_plain_text_message(self):
+        message = AIMessage(content="hello there")
+        result = LLM._langchain_message_to_openai(message)
+        assert result == {"role": "assistant", "content": "hello there"}
+
+    def test_message_with_tool_calls_encodes_arguments_as_json_string(self):
+        message = AIMessage(content="", tool_calls=[{"name": "acquire_image", "args": {"n": 1}, "id": "call_9"}])
+        result = LLM._langchain_message_to_openai(message)
+        assert result["tool_calls"] == [{
+            "id": "call_9",
+            "type": "function",
+            "function": {"name": "acquire_image", "arguments": '{"n": 1}'},
+        }]
+
+    def test_tool_call_missing_id_gets_a_fallback(self):
+        message = AIMessage(content="", tool_calls=[{"name": "acquire_image", "args": {}, "id": ""}])
+        result = LLM._langchain_message_to_openai(message)
+        assert result["tool_calls"][0]["id"] == "call_0"
+
+
+class TestComplete:
+    def test_returns_tool_call_decision(self):
+        device = _make_llm()
+        response = AIMessage(content="", tool_calls=[{"name": "acquire_image", "args": {}, "id": "call_1"}])
+        bound_model = AsyncMock()
+        bound_model.ainvoke.return_value = response
+        device._model = MagicMock()
+        device._model.bind_tools.return_value = bound_model
+
+        request = {
+            "messages": [{"role": "user", "content": "acquire an image"}],
+            "tools": [{"type": "function", "function": {"name": "acquire_image"}}],
+        }
+        result = json.loads(asyncio.run(device.Complete(json.dumps(request))))
+
+        assert result["message"]["tool_calls"][0]["function"]["name"] == "acquire_image"
+        device._model.bind_tools.assert_called_once_with(request["tools"])
+
+    def test_skips_bind_tools_when_no_tools_given(self):
+        device = _make_llm()
+        response = AIMessage(content="hi there")
+        device._model = AsyncMock()
+        device._model.ainvoke.return_value = response
+
+        request = {"messages": [{"role": "user", "content": "hi"}]}
+        result = json.loads(asyncio.run(device.Complete(json.dumps(request))))
+
+        assert result["message"]["content"] == "hi there"
+        device._model.ainvoke.assert_called_once()
+
+    def test_invalid_json_returns_error_payload(self):
+        device = _make_llm()
+        result = json.loads(asyncio.run(device.Complete("not json")))
+        assert "error" in result
+        assert "message" in result["error"]
+
+    def test_model_exception_returns_error_payload(self):
+        device = _make_llm()
+        device._model = AsyncMock()
+        device._model.ainvoke.side_effect = RuntimeError("model unavailable")
+
+        request = {"messages": [{"role": "user", "content": "hi"}]}
+        result = json.loads(asyncio.run(device.Complete(json.dumps(request))))
+
+        assert result["error"]["message"] == "model unavailable"

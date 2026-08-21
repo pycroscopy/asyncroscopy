@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -21,7 +22,6 @@ from startup_guis.qt_compat import (  # noqa: E402
     QComboBox,
     QFileDialog,
     QFormLayout,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -33,55 +33,89 @@ from startup_guis.qt_compat import (  # noqa: E402
     QWidget,
     app_exec,
 )
-from startup_guis.shared import BODY_FONT, CONFIG_DIR, GENERATED_CONFIG_DIR, SECTION_FONT, TEXT_FONT, TITLE_FONT, ManagedCommand, action_button, append_terminal_text, configure_terminal, load_yaml, write_yaml, yaml_text  # noqa: E402
+from startup_guis.shared import BODY_FONT, CONFIG_DIR, DIGITAL_TWIN_HOST, GENERATED_CONFIG_DIR, SPECTRA300_HOST, TEXT_FONT, TITLE_FONT, CheckBox, CollapsibleSection, HostToggle, ManagedCommand, action_button, append_terminal_text, apply_theme, configure_splitter, configure_terminal, load_yaml, scrollable, section_label, set_tool_count_badge, tool_count_badge, write_yaml, yaml_text  # noqa: E402
 
 
 DEFAULT_CONFIG_PATH = CONFIG_DIR / 'mcp.yaml'
 GENERATED_CONFIG_PATH = GENERATED_CONFIG_DIR / 'mcp_gui.yaml'
+# Matches the unconditional "MCP ready: N tool(s) registered" line mcp_server.py
+# prints once tool discovery finishes, even in quiet mode.
+TOOL_COUNT_PATTERN = re.compile(r'MCP ready: (\d+) tool')
+# Matches the fatal "MCP ERROR: ..." line mcp_server.py prints when it cannot
+# start (e.g. the port is already held by another server instance).
+MCP_ERROR_PATTERN = re.compile(r'MCP ERROR: (.+)')
+
+
+def parse_int_safe(val: str, default: int) -> int:
+    val_str = str(val).strip().rstrip('\\')
+    cleaned = re.sub(r'\D', '', val_str)
+    return int(cleaned) if cleaned else default
 
 
 def mcp_config_from_values(values: dict) -> dict:
     blocked_functions = yaml.safe_load(values['blocked_functions']) if values['blocked_functions'].strip() else {}
-    return {
-        'tango': {'host': values['tango_host'], 'port': int(values['tango_port'])},
+    include_only_raw = values.get('include_only_functions', '')
+    config = {
+        'tango': {'host': values['tango_host'], 'port': parse_int_safe(values['tango_port'], 9094)},
         'mcp': {
             'name': values['name'],
             'transport': values['transport'],
             'http_host': values['http_host'],
-            'http_port': int(values['http_port']),
+            'http_port': parse_int_safe(values['http_port'], 8000),
             'data_device_address': values['data_device_address'],
             'quiet': values['quiet'],
             'blocked_classes': [item.strip() for item in values['blocked_classes'].split(',') if item.strip()],
             'blocked_functions': blocked_functions or {},
         },
     }
+    if include_only_raw.strip():
+        config['mcp']['include_only_functions'] = [item.strip() for item in include_only_raw.split(',') if item.strip()]
+    return config
 
 
 class McpGui(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle('Asyncroscopy MCP Startup')
-        self.resize(1080, 720)
+        self.resize(1280, 960)
+        self.setMinimumSize(880, 560)
         self.command = ManagedCommand(self.enqueue_output, self.process_done)
+        self.badge_error = False
         self.default_config = load_yaml(DEFAULT_CONFIG_PATH)
         self.inputs: dict[str, QLineEdit | QComboBox | QCheckBox] = {}
         self.build()
+        # Default to the digital twin regardless of what host the config file
+        # names, so a fresh launch never points at the real instrument.
+        self.apply_host_preset(DIGITAL_TWIN_HOST)
         self.refresh_yaml()
 
     def build(self) -> None:
-        self.setFont(BODY_FONT)
+        apply_theme(self)
         root = QSplitter(VERTICAL)
         top = QSplitter(HORIZONTAL)
+        configure_splitter(root)
+        configure_splitter(top)
         controls = QWidget()
         preview = QWidget()
         terminal = QWidget()
+        # The controls pane scrolls, so collapsing a section never stretches the
+        # remaining fields and the terminal keeps whatever height it was given.
         root.addWidget(top)
         root.addWidget(terminal)
-        top.addWidget(controls)
+        top.addWidget(scrollable(controls))
         top.addWidget(preview)
-        root.setSizes([500, 220])
-        top.setSizes([500, 580])
-        self.setCentralWidget(root)
+        top.setStretchFactor(0, 0)
+        top.setStretchFactor(1, 1)
+        root.setStretchFactor(0, 0)
+        root.setStretchFactor(1, 1)
+        root.setSizes([400, 560])
+        top.setSizes([620, 640])
+        container = QWidget()
+        container.setObjectName('appRoot')
+        wrapper = QVBoxLayout(container)
+        wrapper.setContentsMargins(14, 14, 14, 14)
+        wrapper.addWidget(root)
+        self.setCentralWidget(container)
 
         self.build_controls(controls)
         self.build_preview(preview)
@@ -89,18 +123,30 @@ class McpGui(QMainWindow):
 
     def build_controls(self, parent: QWidget) -> None:
         layout = QVBoxLayout(parent)
+        layout.setContentsMargins(0, 0, 12, 0)
+        layout.setSpacing(10)
+        title_row = QHBoxLayout()
+        title_row.setSpacing(10)
         title = QLabel('Asyncroscopy MCP Startup')
         title.setFont(TITLE_FONT)
-        layout.addWidget(title)
+        title_row.addWidget(title)
+        self.tool_badge = tool_count_badge()
+        title_row.addWidget(self.tool_badge)
+        title_row.addStretch()
+        self.host_toggle = HostToggle(self.apply_host_preset)
+        title_row.addWidget(self.host_toggle)
+        layout.addLayout(title_row)
 
         tango = self.default_config['tango']
-        database = self.section('Database')
+        database = self.section('Database', expanded=False)
         self.add_row(database, 'Tango host', self.line_input('tango_host', tango.get('host', 'localhost')))
+        self.inputs['tango_host'].textChanged.connect(self.sync_host_toggle)
         self.add_row(database, 'Tango port', self.line_input('tango_port', tango.get('port', 9094)))
         layout.addWidget(database)
+        self.sync_host_toggle()
 
         mcp = self.default_config['mcp']
-        mcp_server = self.section('MCP server')
+        mcp_server = self.section('MCP server', expanded=False)
         self.add_row(mcp_server, 'Name', self.line_input('name', mcp.get('name', 'Spectra300_MCP')))
         transport = QComboBox()
         transport.addItems(['streamable-http'])
@@ -111,27 +157,29 @@ class McpGui(QMainWindow):
         self.add_row(mcp_server, 'HTTP host', self.line_input('http_host', mcp.get('http_host', '127.0.0.1')))
         self.add_row(mcp_server, 'HTTP port', self.line_input('http_port', mcp.get('http_port', 8000)))
         quiet = self.check_input('quiet', 'Quiet mode', bool(mcp.get('quiet', True)))
-        mcp_server.layout().addRow('', quiet)
+        mcp_server.form.addRow('', quiet)
         layout.addWidget(mcp_server)
 
-        data_access = self.section('Data access')
+        data_access = self.section('Data access', expanded=False)
         self.add_row(data_access, 'DATA device', self.line_input('data_device_address', mcp.get('data_device_address', 'asyncroscopy/data/default')))
         layout.addWidget(data_access)
 
-        access_control = self.section('Access control')
+        access_control = self.section('Access control', expanded=False)
         self.add_row(access_control, 'Blocked classes', self.line_input('blocked_classes', ', '.join(mcp.get('blocked_classes', []))))
-        blocked_label = QLabel('Blocked functions YAML')
-        blocked_label.setFont(BODY_FONT)
-        access_control.layout().addRow(blocked_label)
+        self.add_row(access_control, 'Include only functions', self.line_input('include_only_functions', ', '.join(mcp.get('include_only_functions', []))))
+        blocked_label = section_label('Blocked functions YAML')
+        access_control.form.addRow(blocked_label)
         self.blocked_functions = QTextEdit()
         self.blocked_functions.setFont(TEXT_FONT)
         self.blocked_functions.setLineWrapMode(NO_WRAP)
+        self.blocked_functions.setMinimumHeight(120)
         self.blocked_functions.setPlainText(yaml.safe_dump(mcp.get('blocked_functions', {}), sort_keys=False))
         self.blocked_functions.textChanged.connect(self.refresh_yaml)
-        access_control.layout().addRow(self.blocked_functions)
+        access_control.form.addRow(self.blocked_functions)
         layout.addWidget(access_control)
 
         actions = QHBoxLayout()
+        actions.setSpacing(8)
         start = action_button('Start', '#1f7a35', '#2ea043')
         stop = action_button('Stop', '#b42318', '#dc2626')
         load = QPushButton('Load config file')
@@ -142,15 +190,16 @@ class McpGui(QMainWindow):
         save.clicked.connect(self.save_config)
         for button in (start, stop, load, save):
             button.setFont(BODY_FONT)
+            button.setMinimumHeight(40)
             actions.addWidget(button)
         layout.addLayout(actions)
         layout.addStretch()
 
     def build_preview(self, parent: QWidget) -> None:
         layout = QVBoxLayout(parent)
-        label = QLabel('Configuration (.yaml)')
-        label.setFont(SECTION_FONT)
-        layout.addWidget(label)
+        layout.setContentsMargins(12, 0, 0, 0)
+        layout.setSpacing(6)
+        layout.addWidget(section_label('Configuration (.yaml)'))
         self.yaml_preview = QTextEdit()
         self.yaml_preview.setFont(TEXT_FONT)
         self.yaml_preview.setReadOnly(True)
@@ -159,21 +208,18 @@ class McpGui(QMainWindow):
 
     def build_terminal(self, parent: QWidget) -> None:
         layout = QVBoxLayout(parent)
-        label = QLabel('Terminal output')
-        label.setFont(SECTION_FONT)
-        layout.addWidget(label)
+        layout.setContentsMargins(0, 10, 0, 0)
+        layout.setSpacing(6)
+        layout.addWidget(section_label('Terminal output'))
         self.output = QTextEdit()
         configure_terminal(self.output)
         layout.addWidget(self.output)
 
-    def section(self, title: str) -> QGroupBox:
-        group = QGroupBox(title)
-        group.setFont(SECTION_FONT)
-        group.setLayout(QFormLayout())
-        return group
+    def section(self, title: str, layout_cls=QFormLayout, expanded: bool = True) -> CollapsibleSection:
+        return CollapsibleSection(title, layout_cls=layout_cls, expanded=expanded)
 
-    def add_row(self, group: QGroupBox, label: str, widget: QWidget) -> None:
-        group.layout().addRow(label, widget)
+    def add_row(self, group: CollapsibleSection, label: str, widget: QWidget) -> None:
+        group.form.addRow(label, widget)
 
     def line_input(self, key: str, value) -> QLineEdit:
         widget = QLineEdit(str(value))
@@ -182,11 +228,20 @@ class McpGui(QMainWindow):
         return widget
 
     def check_input(self, key: str, label: str, checked: bool) -> QCheckBox:
-        widget = QCheckBox(label)
+        widget = CheckBox(label)
         widget.setChecked(checked)
         widget.stateChanged.connect(self.refresh_yaml)
         self.inputs[key] = widget
         return widget
+
+    def apply_host_preset(self, host: str) -> None:
+        self.inputs['tango_host'].setText(host)
+
+    def sync_host_toggle(self) -> None:
+        """Reflect whether the Tango host field currently matches a known preset."""
+        host = self.inputs['tango_host'].text()
+        key = {DIGITAL_TWIN_HOST: 'digital_twin', SPECTRA300_HOST: 'spectra300'}.get(host)
+        self.host_toggle.set_active(key)
 
     def current_config(self) -> dict:
         values = {
@@ -199,6 +254,7 @@ class McpGui(QMainWindow):
             'data_device_address': self.inputs['data_device_address'].text(),
             'quiet': self.inputs['quiet'].isChecked(),
             'blocked_classes': self.inputs['blocked_classes'].text(),
+            'include_only_functions': self.inputs['include_only_functions'].text() if 'include_only_functions' in self.inputs else '',
             'blocked_functions': self.blocked_functions.toPlainText() if hasattr(self, 'blocked_functions') else '',
         }
         return mcp_config_from_values(values)
@@ -208,8 +264,8 @@ class McpGui(QMainWindow):
             return
         try:
             self.yaml_preview.setPlainText(yaml_text(self.current_config()))
-        except yaml.YAMLError as exc:
-            self.yaml_preview.setPlainText(f'Invalid blocked_functions YAML: {exc}')
+        except (ValueError, yaml.YAMLError) as exc:
+            self.yaml_preview.setPlainText(f'Invalid configuration values or YAML: {exc}')
 
     def save_config(self) -> None:
         path, _ = QFileDialog.getSaveFileName(self, 'Save config', str(CONFIG_DIR / 'mcp_config.yaml'), 'YAML (*.yaml *.yml);;All files (*)')
@@ -233,19 +289,36 @@ class McpGui(QMainWindow):
         self.inputs['data_device_address'].setText(mcp.get('data_device_address', 'asyncroscopy/data/default'))
         self.inputs['quiet'].setChecked(bool(mcp.get('quiet', True)))
         self.inputs['blocked_classes'].setText(', '.join(mcp.get('blocked_classes', [])))
+        if 'include_only_functions' in self.inputs:
+            self.inputs['include_only_functions'].setText(', '.join(mcp.get('include_only_functions', [])))
         self.blocked_functions.setPlainText(yaml.safe_dump(mcp.get('blocked_functions', {}), sort_keys=False))
         self.refresh_yaml()
         self.enqueue_output(f'Loaded {path}\n')
 
     def start(self) -> None:
+        self.badge_error = False
+        set_tool_count_badge(self.tool_badge, None)
         config_path = write_yaml(GENERATED_CONFIG_PATH, self.current_config())
         self.command.start(['uv', 'run', 'python', '-u', 'startup_scripts/run_mcp.py', '--yaml', str(config_path)])
 
     def enqueue_output(self, text: str) -> None:
         append_terminal_text(self.output, text)
+        error_match = MCP_ERROR_PATTERN.search(text)
+        if error_match:
+            self.badge_error = True
+            message = error_match.group(1)
+            set_tool_count_badge(self.tool_badge, None, error='port in use' if 'in use' in message else 'server error')
+            return
+        match = TOOL_COUNT_PATTERN.search(text)
+        if match:
+            set_tool_count_badge(self.tool_badge, int(match.group(1)))
 
     def process_done(self, returncode: int | None) -> None:
         self.enqueue_output(f'\nProcess exited with return code {returncode}.\n')
+        # A dead server serves no tools; drop any stale count but keep an error
+        # badge visible so the failure reason is not lost.
+        if not self.badge_error:
+            set_tool_count_badge(self.tool_badge, None)
 
 
 if __name__ == '__main__':
