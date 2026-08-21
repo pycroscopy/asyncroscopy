@@ -10,6 +10,11 @@ import socket
 import traceback
 from typing import Annotated, Any, Callable
 
+import matplotlib
+
+matplotlib.use("Agg")
+
+import matplotlib.pyplot as plt
 import numpy as np
 from PIL import Image as PILImage
 from pydantic import Field
@@ -31,11 +36,23 @@ from fastmcp.tools import tool, Tool, ToolResult
 from fastmcp.server.server import Transport
 from fastmcp.utilities.types import Image as MCPImage
 
-# Tango commands that acquire and save an image, returning its DATA/Tiled key as a
+from asyncroscopy.data.data_reader import describe_tiled_node
+
+# Tango commands that acquire and save data, returning its DATA/Tiled key as a
 # plain string. Their tool wrappers additionally fetch the array back from Tiled and
 # attach an inline PNG preview, so chat clients that already render MCP image content
 # blocks (e.g. SciAgentGUI) display the capture without any extra tool call.
+# Image commands are previewed as a grayscale rendering of the first 2D dataset;
+# spectrum commands as a plot of the first 1D dataset.
 IMAGE_PREVIEW_COMMANDS = {"acquire_camera_image", "acquire_scanned_image"}
+SPECTRUM_PREVIEW_COMMANDS = {"acquire_spectrum"}
+
+# Tango's client default of 3000 ms is shorter than a real acquisition: the digital
+# twin's first acquire_camera_image takes over 3 s cold, so the call died with
+# API_DeviceTimedOut while the command kept running server-side. SciAgentGUI allows
+# 60 s per MCP HTTP request, so 30 s lets slow commands finish while still failing
+# inside the client's window with a readable Tango error rather than an HTTP timeout.
+COMMAND_TIMEOUT_MILLIS = 30_000
 
 
 class MCPServer:
@@ -128,53 +145,7 @@ class MCPServer:
                 f"Could not resolve data key {key!r} from Tiled server {uri!r}"
             ) from exc
 
-        limit = max(0, int(max_values))
-        suffix = key.rsplit(".", 1)[-1].lower() if "." in key else "unknown"
-        result: dict[str, Any] = {
-            "key": key,
-            "uri": uri,
-            "format": "hdf5" if suffix in {"h5", "hdf5"} else suffix,
-            "attrs": self._numpy_to_python(dict(getattr(node, "metadata", {}) or {})),
-        }
-        datasets: list[dict[str, Any]] = []
-
-        def visit(current: Any, name: str = "") -> None:
-            read = getattr(current, "read", None)
-            if callable(read):
-                shape = tuple(getattr(current, "shape", ()) or ())
-                if limit == 0:
-                    array = np.asarray([], dtype=getattr(current, "dtype", float))
-                elif shape:
-                    remaining = limit
-                    slices = []
-                    for size in reversed(shape):
-                        take = min(int(size), max(1, remaining))
-                        slices.append(slice(0, take))
-                        remaining = (remaining + take - 1) // take
-                    array = np.asarray(read(tuple(reversed(slices))))
-                else:
-                    array = np.asarray(read())
-                item: dict[str, Any] = {
-                    "name": name,
-                    "shape": list(shape or array.shape),
-                    "dtype": str(getattr(current, "dtype", array.dtype)),
-                    "attrs": self._numpy_to_python(
-                        dict(getattr(current, "metadata", {}) or {})
-                    ),
-                    "preview": self._numpy_to_python(array.reshape(-1)[:limit]),
-                }
-                datasets.append(item)
-                return
-
-            keys = getattr(current, "keys", None)
-            if callable(keys):
-                for child_name in keys():
-                    child_path = f"{name}/{child_name}" if name else str(child_name)
-                    visit(current[child_name], child_path)
-
-        visit(node)
-        result["datasets"] = datasets
-        return result
+        return describe_tiled_node(key, uri, node, max_values=max_values)
 
     @staticmethod
     def _find_first_2d_array(node: Any, prefer_key: str | None = None) -> np.ndarray | None:
@@ -231,6 +202,15 @@ class MCPServer:
         image.save(buffer, format="PNG")
         return buffer.getvalue()
 
+    def _resolve_tiled_node(self, key: str) -> Any:
+        """Resolve a DATA/Tiled key to its Tiled node via the DATA device's config."""
+        data = DeviceProxy(self.data_device_address)
+        config = json.loads(data.get_config())
+        uri = config.get("uri")
+        if not uri:
+            raise RuntimeError("the DATA device's config carries no Tiled uri")
+        return from_uri(uri)[key]
+
     def _fetch_image_preview(self, key: str) -> tuple[MCPImage | None, str | None]:
         """Fetch a captured image from Tiled and render it as a PNG preview.
 
@@ -241,12 +221,7 @@ class MCPServer:
         indistinguishable from a command that never produces images.
         """
         try:
-            data = DeviceProxy(self.data_device_address)
-            config = json.loads(data.get_config())
-            uri = config.get("uri")
-            if not uri:
-                return None, "the DATA device's config carries no Tiled uri"
-            node = from_uri(uri)[key]
+            node = self._resolve_tiled_node(key)
             array = self._find_first_2d_array(node, prefer_key="image")
             if array is None:
                 return None, f"no 2D dataset was found under key {key!r} in Tiled"
@@ -254,6 +229,116 @@ class MCPServer:
         except Exception as exc:
             if self.verbose:
                 print(f"[image preview] could not build preview for {key!r}: {exc}")
+            return None, f"{type(exc).__name__}: {exc}"
+
+    @staticmethod
+    def _find_first_1d_array(
+        node: Any, prefer_key: str | None = None
+    ) -> tuple[np.ndarray, dict[str, Any]] | None:
+        """Recursively search a Tiled node for the first readable 1D dataset.
+
+        Returns (array, metadata) so the caller can label the plot from the
+        dataset's HDF5 attributes (see data_writer.save_acquisition, which
+        stores spectra under a "spectrum" dataset name).
+        """
+
+        def search(current: Any) -> tuple[np.ndarray, dict[str, Any]] | None:
+            read = getattr(current, "read", None)
+            if callable(read):
+                try:
+                    array = np.asarray(read())
+                except Exception:
+                    return None
+                if array.ndim != 1 or array.size == 0:
+                    return None
+                metadata = dict(getattr(current, "metadata", {}) or {})
+                return array, metadata
+
+            keys = getattr(current, "keys", None)
+            if callable(keys):
+                for child_name in keys():
+                    try:
+                        found = search(current[child_name])
+                    except Exception:
+                        continue
+                    if found is not None:
+                        return found
+            return None
+
+        if prefer_key is not None:
+            try:
+                found = search(node[prefer_key])
+                if found is not None:
+                    return found
+            except Exception:
+                pass
+        return search(node)
+
+    @staticmethod
+    def _element_labels(metadata: dict[str, Any]) -> list[str] | None:
+        """Extract per-channel element labels from a spectrum dataset's attrs.
+
+        data_writer json-encodes non-scalar HDF5 attrs, so "elements" may arrive
+        as a JSON string or as a list. Returns None when absent or malformed,
+        in which case the preview falls back to an unlabeled channel axis.
+        """
+        raw = metadata.get("elements")
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except json.JSONDecodeError:
+                return None
+        if isinstance(raw, (list, tuple)) and raw and all(isinstance(item, str) for item in raw):
+            return list(raw)
+        return None
+
+    @staticmethod
+    def _spectrum_to_png_bytes(values: np.ndarray, labels: list[str] | None = None) -> bytes:
+        """Render a 1D spectrum as a PNG plot.
+
+        With one label per value (the digital twin's per-element composition
+        spectra) this draws a labeled bar chart; otherwise a line plot against
+        channel index, which is the only axis honestly known without calibration.
+        """
+        counts = np.asarray(values, dtype=np.float64)
+        figure, axes = plt.subplots(figsize=(6.0, 3.5), dpi=120)
+        try:
+            if labels is not None and len(labels) == len(counts):
+                positions = np.arange(len(counts))
+                axes.bar(positions, counts)
+                axes.set_xticks(positions)
+                axes.set_xticklabels(labels)
+                axes.set_xlabel("element")
+                axes.set_ylabel("relative intensity")
+            else:
+                axes.plot(np.arange(counts.size), counts, linewidth=1.0)
+                axes.set_xlabel("channel")
+                axes.set_ylabel("counts")
+            figure.tight_layout()
+            buffer = io.BytesIO()
+            figure.savefig(buffer, format="png")
+            return buffer.getvalue()
+        finally:
+            plt.close(figure)
+
+    def _fetch_spectrum_preview(self, key: str) -> tuple[MCPImage | None, str | None]:
+        """Fetch an acquired spectrum from Tiled and render it as a PNG plot.
+
+        Same contract as _fetch_image_preview: (preview, None) on success,
+        (None, reason) on failure so the tool result states why no preview
+        accompanies the key.
+        """
+        try:
+            node = self._resolve_tiled_node(key)
+            found = self._find_first_1d_array(node, prefer_key="spectrum")
+            if found is None:
+                return None, f"no 1D dataset was found under key {key!r} in Tiled"
+            array, metadata = found
+            labels = self._element_labels(metadata)
+            return MCPImage(data=self._spectrum_to_png_bytes(array, labels), format="png"), None
+        except Exception as exc:
+            if self.verbose:
+                print(f"[spectrum preview] could not build preview for {key!r}: {exc}")
             return None, f"{type(exc).__name__}: {exc}"
 
     def _augment_with_preview(self, command_name: str, result: Any) -> Any:
@@ -267,9 +352,14 @@ class MCPServer:
         cannot be built, a text block states the reason instead of the image, so
         the failure is visible to the operator and the model rather than silent.
         """
-        if command_name not in IMAGE_PREVIEW_COMMANDS or not isinstance(result, str) or not result:
+        if not isinstance(result, str) or not result:
             return result
-        preview, failure = self._fetch_image_preview(result)
+        if command_name in IMAGE_PREVIEW_COMMANDS:
+            preview, failure = self._fetch_image_preview(result)
+        elif command_name in SPECTRUM_PREVIEW_COMMANDS:
+            preview, failure = self._fetch_spectrum_preview(result)
+        else:
+            return result
         if preview is None:
             return ToolResult(
                 content=[result, f"image preview unavailable: {failure}"],
@@ -415,7 +505,6 @@ class MCPServer:
             match = re.search(r'(?::param|@param)\s+(\w+):', in_desc)
             if match:
                 param_name = match.group(1)
-                print(param_name)
 
         if in_desc and in_desc.lower() not in (
             "uninitialised",
@@ -488,6 +577,7 @@ class MCPServer:
                 continue
             try:
                 dev = DeviceProxy(device_name)
+                dev.set_timeout_millis(COMMAND_TIMEOUT_MILLIS)
                 info = dev.info()
                 dev_class = info.dev_class
             except Exception as exc:

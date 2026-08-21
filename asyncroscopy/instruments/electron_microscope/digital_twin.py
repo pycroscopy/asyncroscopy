@@ -608,7 +608,15 @@ class DigitalTwin(ElectronMicroscope):
         spectrum = self._simulate_spectrum(detector_name, exposure_time)
         data_server = self._detector_proxies.get("data")
         spectrum_array = np.array(list(spectrum.values()), dtype=np.float64)
-        return save_acquisition(self, data_server, "spectrum", detector_name, spectrum_array, dataset_name="spectrum")
+        return save_acquisition(
+            self,
+            data_server,
+            "spectrum",
+            detector_name,
+            spectrum_array,
+            dataset_name="spectrum",
+            dataset_attrs={"elements": list(spectrum.keys())},
+        )
 
     def _place_beam(self, position) -> None:
         """Place the electron beam at the specified [x, y] coordinates."""
