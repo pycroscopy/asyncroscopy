@@ -88,7 +88,7 @@ class TestDataDevice:
 
         assert returned["tiled_server"] == "yes"
         command_prefix = ["python", "-m"]
-        key_value = popen_calls[0]["command"][10]
+        key_value = popen_calls[0]["command"][12]
         expected_command = [
             *command_prefix,
             "tiled",
@@ -96,6 +96,8 @@ class TestDataDevice:
             "catalog",
             str(tmp_path / ".asyncroscopy_tiled_catalog.db"),
             "--read",
+            str(tmp_path),
+            "--write",
             str(tmp_path),
             "--public",
             "--api-key",

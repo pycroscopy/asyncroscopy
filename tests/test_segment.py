@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-from pathlib import Path
 from types import SimpleNamespace
 
-import h5py
 import numpy as np
 import pytest
 
@@ -94,21 +92,28 @@ def test_area_statistics_match_one_based_label_ids() -> None:
     assert device._n_areas == 1
 
 
-def test_segment_saves_labels_registers_with_tiled_and_returns_key(tmp_path) -> None:
+def test_segment_writes_labels_to_tiled_and_returns_key(monkeypatch) -> None:
     source = np.arange(16, dtype=np.float32).reshape(4, 4)
     mask = np.zeros((4, 4), dtype=bool)
     mask[1:3, 1:3] = True
     areas = [{"segmentation": mask, "area": 4, "predicted_iou": 0.9}]
 
     class FakeDataProxy:
-        save_path = str(tmp_path)
-        registered_paths: list[str] = []
+        def get_config(self) -> str:
+            return '{"uri": "http://tiled.example"}'
 
-        def register_path(self, path: str) -> str:
-            self.registered_paths.append(path)
-            return Path(path).name
+    class FakeTiledClient:
+        writes: list[tuple[np.ndarray, str, dict]] = []
+
+        def write_array(self, labels, *, key, metadata) -> None:
+            self.writes.append((labels, key, metadata))
 
     data_proxy = FakeDataProxy()
+    tiled = FakeTiledClient()
+    monkeypatch.setattr(
+        "asyncroscopy.mcp.segment.from_uri",
+        lambda uri, api_key=None: tiled,
+    )
     device = SimpleNamespace(
         _get_data_proxy=lambda: data_proxy,
         _load_image_from_key=lambda key, proxy: source,
@@ -120,21 +125,21 @@ def test_segment_saves_labels_registers_with_tiled_and_returns_key(tmp_path) -> 
 
     output_key = SEGMENTATION.segment(device, "source-image.h5")
 
-    assert len(data_proxy.registered_paths) == 1
-    output_path = Path(data_proxy.registered_paths[0])
-    assert output_key == output_path.name
-    with h5py.File(output_path, "r") as output:
-        assert output.attrs["source_data_key"] == "source-image.h5"
-        assert output["labels"].attrs["source_data_key"] == "source-image.h5"
-        np.testing.assert_array_equal(
-            output["labels"][:],
-            np.array(
-                [
-                    [0, 0, 0, 0],
-                    [0, 1, 1, 0],
-                    [0, 1, 1, 0],
-                    [0, 0, 0, 0],
-                ],
-                dtype=np.uint32,
-            ),
-        )
+    assert output_key.startswith("segmentation_")
+    assert len(tiled.writes) == 1
+    labels, key, metadata = tiled.writes[0]
+    assert key == output_key
+    assert metadata["source_data_key"] == "source-image.h5"
+    assert metadata["model"] == "facebook/sam2-hiera-large"
+    np.testing.assert_array_equal(
+        labels,
+        np.array(
+            [
+                [0, 0, 0, 0],
+                [0, 1, 1, 0],
+                [0, 1, 1, 0],
+                [0, 0, 0, 0],
+            ],
+            dtype=np.uint32,
+        ),
+    )

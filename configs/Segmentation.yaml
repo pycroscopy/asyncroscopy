@@ -1,27 +1,11 @@
-# Standalone segmentation stack. Install SAM2 before starting:
-#     uv sync --extra segment
-# Then run:
-#     uv run startup_scripts/run_servers.py --yaml configs/Segmentation.yaml
-
-devices:
-  data:
-    module_name: asyncroscopy.data.data
-  segment:
-    class_name: SEGMENTATION
-    module_name: asyncroscopy.mcp.segment
-    properties:
-      data_device_address: asyncroscopy/data/default
+# Segmentation Tango device configuration.
+# This launcher assumes Tango, DATA, and Tiled are already running.
 
 tango:
-  host: localhost
+  host: 216.96.178.92
   port: 9094
-  reset_database_file: false
 
-tiled:
-  host: localhost
-  port: 9091
-  acquisition_dir: outputs/tiled_acquisitions
-  autostart: true
-  register_on_startup: false
-
+data_device_address: asyncroscopy/data/default
+model_size: facebook/sam2-hiera-large
+compute_device: cuda
 device_timeout_seconds: 120

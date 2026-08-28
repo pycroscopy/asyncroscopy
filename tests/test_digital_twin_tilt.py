@@ -203,7 +203,6 @@ def test_camera_diffraction_uses_local_silicon_ase_model(
             "BM-Ceta",
             "Half",
             frame_combining=2,
-            electron_counting=True,
         )
     )
 

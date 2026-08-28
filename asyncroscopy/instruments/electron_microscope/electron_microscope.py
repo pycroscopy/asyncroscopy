@@ -136,7 +136,6 @@ class ElectronMicroscope(Instrument):
             camera.camera_detector,
             camera.readout_area,
             camera.frame_combining,
-            camera.electron_counting,
             camera.output_format,
         )
 
@@ -295,7 +294,6 @@ class ElectronMicroscope(Instrument):
         detector: str,
         readout_area: str,
         frame_combining: int = 1,
-        electron_counting: bool = True,
         output_format: str = '.h5',
     ) -> str:
         """Vendor-specific camera acquisition implementation."""

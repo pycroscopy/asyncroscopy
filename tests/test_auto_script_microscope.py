@@ -190,44 +190,46 @@ class TestAutoScriptMicroscope:
             }
         ]
 
-    def test_scanned_data_advanced_discovers_mrc_and_waits_for_registration(self, monkeypatch, tmp_path) -> None:
+    def test_scanned_data_advanced_places_probe_and_saves_camera_frames(self, tmp_path) -> None:
+        class FakeImage:
+            def __init__(self, value) -> None:
+                self.data = np.full((256, 256), value, dtype=np.int16)
+
         class FakeAcquisition:
-            def __init__(self) -> None:
-                self.settings = None
+            def __init__(self, optics) -> None:
+                self.optics = optics
+                self.positions = []
+                self.settings = []
 
-            def acquire_stem_data_advanced(self, settings):
-                self.settings = settings
+            def acquire_camera_image_advanced(self, settings):
+                self.positions.append(list(self.optics.paused_scan_beam_position))
+                self.settings.append(settings)
+                return FakeImage(len(self.positions))
 
-        acquisition = FakeAcquisition()
-        data_server = FakeDataServer()
+        optics = types.SimpleNamespace(paused_scan_beam_position=[0.1, 0.2])
+        acquisition = FakeAcquisition(optics)
+        data_server = FakeDataServer(tmp_path)
         microscope = AutoScriptMicroscope.__new__(AutoScriptMicroscope)
-        microscope._microscope = types.SimpleNamespace(acquisition=acquisition)
+        microscope._microscope = types.SimpleNamespace(acquisition=acquisition, optics=optics)
         microscope._detector_proxies = {"data": data_server}
-        monkeypatch.setattr("asyncroscopy.instruments.electron_microscope.auto_script.AUTOSCRIPT_STEM_OUTPUT_DIRECTORY", tmp_path)
-        monkeypatch.setattr("asyncroscopy.instruments.electron_microscope.auto_script.time.sleep", lambda _: (tmp_path / "new_scan.mrc").write_bytes(b"complete-mrc"))
-        (tmp_path / "existing.mrc").write_bytes(b"old-mrc")
 
-        result = AutoScriptMicroscope._acquire_scanned_data_advanced(microscope, imsize=128, dwell_time=10e-3, detector="BM-Ceta", scan_region=[0.25, 0.25, 0.5, 0.5])
+        result = AutoScriptMicroscope._acquire_scanned_data_advanced(microscope, imsize=2, dwell_time=10e-3, detector="bm-ceta", scan_region=[0.25, 0.25, 0.5, 0.5])
 
-        settings = acquisition.settings
-        assert result == "registered-stem-data.h5"
-        assert data_server.copy_requests == [
-            {
-                "source_path": str(tmp_path / "new_scan.mrc"),
-                "detector": "BM-Ceta",
-                "scan_shape": [128, 128],
-                "dwell_time": 10e-3,
-                "scan_region": [0.25, 0.25, 0.5, 0.5],
-            }
+        assert acquisition.positions == [
+            [0.375, 0.375],
+            [0.625, 0.375],
+            [0.375, 0.625],
+            [0.625, 0.625],
         ]
-        assert settings.size == 128
-        assert settings.dwell_time == pytest.approx(10e-3)
-        assert settings.detector_types == [CameraType.BM_CETA]
-        assert settings.region.coordinate_system == RegionCoordinateSystem.RELATIVE
-        assert settings.region.rectangle.left == pytest.approx(0.25)
-        assert settings.region.rectangle.top == pytest.approx(0.25)
-        assert settings.region.rectangle.width == pytest.approx(0.5)
-        assert settings.region.rectangle.height == pytest.approx(0.5)
+        assert optics.paused_scan_beam_position == [0.1, 0.2]
+        assert all(settings.camera_detector == "BM-Ceta" for settings in acquisition.settings)
+        assert all(settings.size == 256 for settings in acquisition.settings)
+        assert all(settings.exposure_time == pytest.approx(10e-3) for settings in acquisition.settings)
+        assert all(settings.fixed_readout_area == "Half" for settings in acquisition.settings)
+        with h5py.File(result, "r") as h5:
+            assert h5["stem_data"].shape == (2, 2, 256, 256)
+            assert h5["stem_data"][:, :, 0, 0].tolist() == [[1, 2], [3, 4]]
+            assert h5["stem_data"].attrs["detector"] == "BM-Ceta"
 
     def test_camera_settings_propagate_into_acquisition(
         self,
@@ -240,7 +242,6 @@ class TestAutoScriptMicroscope:
         camera_proxy.readout_area = "Half"
         camera_proxy.camera_detector = "BM-Ceta"
         camera_proxy.frame_combining = 6
-        camera_proxy.electron_counting = False
         camera_proxy.output_format = ".h5"
 
         saved_path = auto_script_proxy.acquire_camera_image()
@@ -253,7 +254,6 @@ class TestAutoScriptMicroscope:
                 "detector": "BM-Ceta",
                 "readout_area": "Half",
                 "frame_combining": 6,
-                "electron_counting": False,
                 "output_format": ".h5",
             }
         ]
@@ -293,7 +293,6 @@ class TestAutoScriptMicroscope:
             detector="BM-Ceta",
             readout_area="Half",
             frame_combining=6,
-            electron_counting=False,
         )
 
         settings = acquisition.settings
@@ -302,7 +301,6 @@ class TestAutoScriptMicroscope:
         assert settings.exposure_time == pytest.approx(0.5)
         assert settings.fixed_readout_area == FixedReadoutArea.HALF
         assert settings.frame_combining == 6
-        assert settings.electron_counting is False
         with h5py.File(result, "r") as h5:
             assert h5["image"][()].tolist() == [[9, 8], [7, 6]]
             assert h5["image"].attrs["acquisition_type"] == "camera_image"
@@ -344,7 +342,6 @@ class TestAutoScriptMicroscope:
         camera_proxy.imsize = 1024
         camera_proxy.readout_area = "Full"
         camera_proxy.frame_combining = 1
-        camera_proxy.electron_counting = True
         camera_proxy.output_format = ".h5"
 
         saved_path = auto_script_proxy.acquire_camera_image()
@@ -357,7 +354,6 @@ class TestAutoScriptMicroscope:
                 "detector": "Flucam",
                 "readout_area": "Full",
                 "frame_combining": 1,
-                "electron_counting": True,
                 "output_format": ".h5",
             }
         ]

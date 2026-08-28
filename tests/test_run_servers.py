@@ -78,26 +78,6 @@ def test_build_devices_adds_selected_instrument():
     assert devices[-1].device_name == "asyncroscopy/instrument/default"
 
 
-def test_standalone_segmentation_config_has_only_required_devices():
-    config = run_servers.load_config(
-        run_servers.PROJECT_DIR / "configs" / "Segmentation.yaml"
-    )
-
-    devices = run_servers.build_devices(config)
-    data = next(device for device in devices if device.key == "data")
-    segment = next(device for device in devices if device.key == "segment")
-
-    assert config.instrument is None
-    assert [device.key for device in devices] == ["data", "segment"]
-    assert data.module_name == "asyncroscopy.data.data"
-    assert segment.class_name == "SEGMENTATION"
-    assert segment.module_name == "asyncroscopy.mcp.segment"
-    assert segment.device_name == "asyncroscopy/segment/default"
-    assert segment.properties["data_device_address"] == ["asyncroscopy/data/default"]
-    assert run_servers.selected_instrument(devices) is None
-    assert run_servers.instrument_properties(config) == {}
-
-
 def test_load_tilt_twin_config_includes_simulation_properties():
     config = run_servers.load_config(
         run_servers.PROJECT_DIR / "configs" / "digital_twin_tilt.yaml"
@@ -116,6 +96,19 @@ def test_load_tilt_twin_config_includes_simulation_properties():
     assert properties["multislice_supercell_z"] == ["8"]
     assert properties["rotation_center_z_nm"] == ["125"]
     assert properties["randomness_scale"] == ["1.0"]
+    assert properties["stage_device_address"] == ["asyncroscopy/stage/default"]
+
+
+def test_load_particle_twin_config_uses_renamed_module():
+    config = run_servers.load_config(
+        run_servers.PROJECT_DIR / "configs" / "digital_twin_particles.yaml"
+    )
+    properties = run_servers.instrument_properties(config)
+
+    assert config.instrument.class_name == "DigitalTwinParticles"
+    assert config.instrument.module_name.endswith("digital_twin_particles")
+    assert properties["world_imsize"] == ["128"]
+    assert properties["data_device_address"] == ["asyncroscopy/data/default"]
     assert properties["stage_device_address"] == ["asyncroscopy/stage/default"]
 
 

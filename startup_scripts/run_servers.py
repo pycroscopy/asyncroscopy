@@ -101,7 +101,7 @@ class TiledConfig:
 @dataclass(frozen=True)
 class Config:
     path: Path
-    instrument: InstrumentConfig | None
+    instrument: InstrumentConfig
     support_devices: list[DeviceConfig]
     tango_host: str
     tango_port: int
@@ -178,7 +178,7 @@ def load_config(path: Path) -> Config:
 
     return Config(
         path=path,
-        instrument=_instrument_config(raw["instrument"]) if raw.get("instrument") else None,
+        instrument=_instrument_config(_require(raw, "instrument", "(top level)")),
         support_devices=support_devices,
         tango_host=_require(tango_section, "host", "tango"),
         tango_port=int(_require(tango_section, "port", "tango")),
@@ -195,17 +195,15 @@ def load_config(path: Path) -> Config:
 
 
 def build_devices(config: Config) -> list[DeviceConfig]:
-    devices = list(config.support_devices)
-    if config.instrument is not None:
-        devices.append(
-            DeviceConfig(
-                key="instrument",
-                class_name=config.instrument.class_name,
-                module_name=config.instrument.module_name,
-                start_after_dependencies=True,
-            )
-        )
-    return devices
+    return [
+        *config.support_devices,
+        DeviceConfig(
+            key="instrument",
+            class_name=config.instrument.class_name,
+            module_name=config.instrument.module_name,
+            start_after_dependencies=True,
+        ),
+    ]
 
 
 def device_address_properties(config: Config) -> dict[str, list[str]]:
@@ -216,8 +214,6 @@ def device_address_properties(config: Config) -> dict[str, list[str]]:
 
 
 def instrument_properties(config: Config) -> dict[str, list[str]]:
-    if config.instrument is None:
-        return {}
     properties = {**config.instrument.properties, **device_address_properties(config)}
     if config.instrument.hardware_host is not None:
         properties['hardware_host'] = [str(config.instrument.hardware_host)]
@@ -248,13 +244,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def instrument_cleanup_patterns(config: Config) -> set[str]:
-    if config.instrument is None:
-        return set()
     return {f"{config.instrument.class_name} instrument_instance"}
 
 
-def selected_instrument(devices: list[DeviceConfig]) -> DeviceConfig | None:
-    return next((device for device in devices if device.key == "instrument"), None)
+def selected_instrument(devices: list[DeviceConfig]) -> DeviceConfig:
+    return next(device for device in devices if device.key == "instrument")
 
 
 def color(text: str, code: str) -> str:
@@ -414,10 +408,9 @@ def register_devices(devices: list[DeviceConfig], instrument_properties: dict[st
             status_line("OK", f"property: {device.device_name} {property_name} = {property_value[0]}")
 
     instrument = selected_instrument(devices)
-    if instrument is not None:
-        for property_name, property_value in instrument_properties.items():
-            database.put_device_property(instrument.device_name, {property_name: property_value})
-            status_line("OK", f"property: {property_name} = {property_value[0]}")
+    for property_name, property_value in instrument_properties.items():
+        database.put_device_property(instrument.device_name, {property_name: property_value})
+        status_line("OK", f"property: {property_name} = {property_value[0]}")
 
 
 def get_data_proxy() -> tango.DeviceProxy:
@@ -552,15 +545,15 @@ def main(argv: list[str] | None = None) -> int:
         should_register_devices = prompt_bool("Register devices", True)
         device_timeout = prompt_int("Device startup timeout seconds", config.device_timeout_seconds)
         
-        if instrument_config is not None and instrument_config.hardware_host is not None:
+        if instrument_config.hardware_host is not None:
             registered_instrument_properties['hardware_host'] = [
                 prompt_str("Hardware host", str(instrument_config.hardware_host))
             ]
-        if instrument_config is not None and instrument_config.hardware_port is not None:
+        if instrument_config.hardware_port is not None:
             registered_instrument_properties['hardware_port'] = [
                 str(prompt_int("Hardware port", int(instrument_config.hardware_port)))
             ]
-        if instrument_config is not None and instrument_config.timeout_seconds is not None:
+        if instrument_config.timeout_seconds is not None:
             registered_instrument_properties['hardware_timeout_seconds'] = [
                 str(prompt_int("Hardware timeout seconds", int(instrument_config.timeout_seconds)))
             ]
@@ -579,8 +572,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  {color('TANGO_HOST', Style.bold):<18} {host}:{port}")
     print(f"  {color('PROJECT', Style.bold):<18} {PROJECT_DIR}")
     print(f"  {color('CONFIG', Style.bold):<18} {config_path}")
-    instrument_name = instrument.class_name if instrument is not None else "(standalone devices)"
-    print(f"  {color('INSTRUMENT', Style.bold):<18} {instrument_name}")
+    print(f"  {color('INSTRUMENT', Style.bold):<18} {instrument.class_name}")
     if log_dir is not None:
         print(f"  {color('DEBUG LOGS', Style.bold):<18} {log_dir}")
     print_inventory(devices)

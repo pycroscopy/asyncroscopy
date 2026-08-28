@@ -55,7 +55,7 @@ class DATA(Device):
         self.set_state(DevState.ON)
         self._host, self._port = self._parse_uri(os.environ.get("ASYNCROSCOPY_TILED_URI", DEFAULT_TILED_URI))
         self._save_path = os.environ.get("ASYNCROSCOPY_ACQUISITION_DIR", DEFAULT_ACQUISITION_DIR)
-        self._api_key = "secret"
+        self._api_key = os.environ.get("ASYNCROSCOPY_TILED_API_KEY", "secret")
         self._tiled_process = None
         self._tiled_serve_path = None
         self._tiled_server = "yes" if self._tiled_alive() else "no"
@@ -155,7 +155,8 @@ class DATA(Device):
 
         command = [
             *self._tiled_command(), "serve", "catalog", catalog_database,
-            "--read", self._save_path, "--public", "--api-key", self._api_key,
+            "--read", self._save_path, "--write", self._save_path,
+            "--public", "--api-key", self._api_key,
             "--host", self._host, "--port", str(self._port),
         ]
         self._tiled_process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT, text=True)

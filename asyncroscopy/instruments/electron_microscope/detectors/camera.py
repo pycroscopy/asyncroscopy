@@ -70,13 +70,6 @@ class CAMERA(Device):
         doc="Number of sub-frames combined by the camera (Ceta-specific).",
     )
 
-    electron_counting = attribute(
-        label="Electron Counting",
-        dtype=bool,
-        access=AttrWriteType.READ_WRITE,
-        doc="Produce an electron-counted image on supported counting detectors.",
-    )
-
     output_format = attribute(
         label="Output Format",
         dtype=str,
@@ -98,7 +91,6 @@ class CAMERA(Device):
         self._readout_area: str = "Full"
         self._camera_detector: str = "BM-Ceta"
         self._frame_combining: int = 1
-        self._electron_counting: bool = True
         self._output_format: str = ".h5"
 
         self.info_stream("CAMERA device initialised")
@@ -148,12 +140,6 @@ class CAMERA(Device):
         if value < 1:
             raise ValueError("frame_combining must be at least 1")
         self._frame_combining = value
-
-    def read_electron_counting(self) -> bool:
-        return self._electron_counting
-
-    def write_electron_counting(self, value: bool) -> None:
-        self._electron_counting = value
 
     def read_output_format(self) -> str:
         return self._output_format

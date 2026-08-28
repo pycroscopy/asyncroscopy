@@ -13,7 +13,6 @@ class TestCAMERAAttributes:
         camera_proxy.readout_area = "Full"
         camera_proxy.camera_detector = "BM-Ceta"
         camera_proxy.frame_combining = 1
-        camera_proxy.electron_counting = True
         camera_proxy.output_format = ".h5"
 
         assert camera_proxy.exposure_time == pytest.approx(1e-3)
@@ -21,7 +20,6 @@ class TestCAMERAAttributes:
         assert camera_proxy.readout_area == "Full"
         assert camera_proxy.camera_detector == "BM-Ceta"
         assert camera_proxy.frame_combining == 1
-        assert bool(camera_proxy.electron_counting) is True
         assert camera_proxy.output_format == ".h5"
 
     def test_write_all_settings(self, camera_proxy):
@@ -30,7 +28,6 @@ class TestCAMERAAttributes:
         camera_proxy.readout_area = "Half"
         camera_proxy.camera_detector = "EF-Ceta"
         camera_proxy.frame_combining = 6
-        camera_proxy.electron_counting = False
         camera_proxy.output_format = ".tiff"
 
         assert camera_proxy.exposure_time == pytest.approx(0.5)
@@ -38,7 +35,6 @@ class TestCAMERAAttributes:
         assert camera_proxy.readout_area == "Half"
         assert camera_proxy.camera_detector == "EF-Ceta"
         assert camera_proxy.frame_combining == 6
-        assert bool(camera_proxy.electron_counting) is False
         assert camera_proxy.output_format == ".tiff"
 
     @pytest.mark.parametrize(

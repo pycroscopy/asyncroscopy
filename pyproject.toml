@@ -68,7 +68,10 @@ ollama = [
 # Install SAM2 segmentation support with:
 #     uv sync --extra segment
 segment = [
+    "huggingface-hub",
     "sam-2 @ git+https://github.com/facebookresearch/sam2.git",
+    "torch",
+    "torchvision",
 ]
 
 [tool.setuptools]
@@ -83,3 +86,14 @@ autoscript-tem-microscope-client = { path = "stubs/AutoScript_v_1.17/autoscript_
 autoscript-tem-toolkit = { path = "stubs/AutoScript_v_1.17/autoscript_tem_toolkit-1.17.0-py3-none-any.whl" }
 thermoscientific-logging = { path = "stubs/AutoScript_v_1.17/thermoscientific_logging-1.3.0-py3-none-any.whl" }
 pyjem = { path = "stubs/PyJEM_v_1.3.0.3564/PyJEM-1.3.0.3564-py3-none-any.whl" }
+torch = [
+    { index = "pytorch-cu130", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+torchvision = [
+    { index = "pytorch-cu130", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
