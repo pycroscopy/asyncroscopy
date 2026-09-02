@@ -14,7 +14,7 @@ from abc import abstractmethod
 
 import tango #type: ignore
 
-from asyncroscopy.data.data_writer import save_acquisition
+#from asyncroscopy.data.data_writer import save_acquisition
 from asyncroscopy.instruments.instrument import CombinedMeta
 
 _PARAM_DEFAULTS = {
@@ -205,6 +205,22 @@ class SPM_SCAN(tango.server.Device, metaclass=CombinedMeta):
         finally:
             self._set_state_and_status(tango.DevState.ON, "Idle.")
 
+    #NB placeholder for now; once DATA is wired up, this will register the scan file and return a unique key.
+    def _save_scan(self, path: str) -> str:
+        """Hand a finished scan file to DATA/Tiled and return its key.
+
+        Placeholder for now: returns the path unchanged. Once DATA is wired up
+        this becomes the same registration the electron microscope side does:
+
+            if self._data_proxy is not None:
+                return self._data_proxy.register_path(path)
+
+        Note for whoever writes that: _hw_acquire_scan returns as soon as the
+        filename appears, so the vendor software may still have the file open.
+        Wait for its size to settle before registering it.
+        """
+        return path
+
     # ------------------------------------------------------------------
     # Attribute read / write, writes pushed to hardware
     # ------------------------------------------------------------------
@@ -276,13 +292,10 @@ class SPM_SCAN(tango.server.Device, metaclass=CombinedMeta):
             )
         self._set_state_and_status(tango.DevState.RUNNING, "Acquiring a scan frame.")
         try:
-            channel_names, data = self._hw_acquire_scan()
+            path = self._hw_acquire_scan()
         finally:
             self._set_state_and_status(tango.DevState.ON, "Idle.")
-        return save_acquisition(
-            self, self._data_proxy, "spm_scan", channel_names, data,
-            dataset_attrs=[self._scan_metadata()] * len(channel_names),
-        )
+        return self._save_scan(path)
     
     @tango.server.command
     def stop_scan(self) -> None:
@@ -317,8 +330,8 @@ class SPM_SCAN(tango.server.Device, metaclass=CombinedMeta):
         pass
 
     @abstractmethod
-    def _hw_acquire_scan(self) -> tuple[list[str], list]:
-        """Run one scan; return (channel_names, list of 2D numpy arrays)."""
+    def _hw_acquire_scan(self) -> str:
+        """Run one scan; return the path of the file the vendor software wrote."""
         pass
 
     @abstractmethod
