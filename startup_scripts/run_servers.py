@@ -67,7 +67,7 @@ class DeviceConfig:
 
     @property
     def command(self) -> list[str]:
-        return ["uv", "run", "python", "-u", "-m", self.module_name, self.instance_name]
+        return [sys.executable, "-u", "-m", self.module_name, self.instance_name]
 
     @property
     def instance_name(self) -> str:
@@ -598,7 +598,7 @@ def main(argv: list[str] | None = None) -> int:
                 database = manager.start_process(
                     key="database",
                     label="Tango database",
-                    command=["uv", "run", "python", "-m", "tango.databaseds.database", "2"],
+                    command=[sys.executable, "-m", "tango.databaseds.database", "2"],
                     env=environment,
                 )
                 print("  WAIT  database readiness", end="", flush=True)
