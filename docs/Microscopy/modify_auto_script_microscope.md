@@ -41,5 +41,5 @@ If you're editing this class, you're usually doing one of these:
    Extend what is read from the detector devices — dwell time, resolution,
    scan region, exposure — and pass it into the AutoScript `*Settings` object
    inside the helper. Pick the right `dataset_name` for `save_acquisition`
-   (e.g. `"image"`, `"spectrum"`, `"stem_data"`); multi-detector results are
-   stored under `image/<DETECTOR>`.
+   (e.g. `"image"`, `"spectrum"`, `"stem_data"`); scanned images construct
+   sidpy datasets and save as NSID under `Measurement_000/Channel_NNN/data/data`.

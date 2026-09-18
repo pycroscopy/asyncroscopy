@@ -4,9 +4,10 @@ Acquisitions save one HDF5 file per event. `save_acquisition` writes arrays and
 metadata attributes, closes the file, then registers it through the DATA Tango
 device.
 
-AutoScript images supply pixels and XML metadata; JEOL supplies pixels and
-separate `dataset_attrs`. XML element text becomes string attributes; other
-non-scalar attribute values are JSON encoded.
+AutoScript scanned images and diffraction DigitalTwin images supply sidpy
+datasets, saved as NSID with calibrated axes and acquisition metadata.
+AutoScript also preserves the original vendor XML.
+Other acquisition paths retain their existing HDF5 layouts.
 
 DATA coordinates registration; the Tiled HTTP server indexes and serves files.
 Each completed acquisition uses `DATA.register_acquisition_file()`, which returns
@@ -29,10 +30,10 @@ config = json.loads(data.get_config())
 client = from_uri(config["uri"])
 
 key = mic.acquire_scanned_image(["HAADF", "BF-S"])
-image = client[key]["image"]["HAADF"].read()
+image = client[key]["Measurement_000"]["Channel_000"]["data"]["data"].read()
 ```
 
-Commands return the exact registered filename key. Camera images use
+Commands return the exact registered filename key. Unmigrated camera images use
 `client[key]["image"]`, spectra use `["spectrum"]`, and 4D-STEM uses
 `["stem_data"]`. Without DATA, saving returns a local file path.
 
