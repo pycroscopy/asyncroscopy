@@ -53,17 +53,19 @@ class DATA(Device):
     def init_device(self) -> None:
         Device.init_device(self)
         self.set_state(DevState.ON)
-        self._host, self._port = self._parse_uri(os.environ.get("ASYNCROSCOPY_TILED_URI", DEFAULT_TILED_URI))
+        uri = os.environ.get("ASYNCROSCOPY_TILED_URI", DEFAULT_TILED_URI)
+        host, _, port = uri.split("://", 1)[-1].strip("/").partition(":")
+        self._host, self._port = host or "10.46.217.241", int(port or 9091)
         self._save_path = os.environ.get("ASYNCROSCOPY_ACQUISITION_DIR", DEFAULT_ACQUISITION_DIR)
         self._api_key = os.environ.get("ASYNCROSCOPY_TILED_API_KEY", "secret")
         self._tiled_process = None
         self._tiled_serve_path = None
-        self._tiled_server = "yes" if self._tiled_alive() else "no"
+        self._tiled_server = "yes" if self._tiled_server_is_reachable() else "no"
         self._tiled_server_status = ""
         self.info_stream("DATA device initialised")
 
     def delete_device(self) -> None:
-        self._stop_tiled_processes()
+        self._stop_managed_tiled_server()
         super().delete_device()
 
     def read_host(self) -> str:
@@ -74,7 +76,7 @@ class DATA(Device):
         if value == self._host:
             return
         self._host = value
-        self._synchronize_tiled_processes()
+        self._restart_managed_tiled_server()
 
     def read_port(self) -> int:
         return self._port
@@ -84,7 +86,7 @@ class DATA(Device):
         if value == self._port:
             return
         self._port = value
-        self._synchronize_tiled_processes()
+        self._restart_managed_tiled_server()
 
     def read_save_path(self) -> str:
         return self._save_path
@@ -94,12 +96,13 @@ class DATA(Device):
         if value == self._save_path:
             return
 
-        _ensure_directory(value)
+        if not (_is_windows_drive_path(value) and os.name != "nt"):
+            Path(value).expanduser().mkdir(parents=True, exist_ok=True)
         self._save_path = value
-        self._synchronize_tiled_processes()
+        self._restart_managed_tiled_server()
 
     def read_tiled_server(self) -> str:
-        self._tiled_server = "yes" if self._tiled_alive() else "no"
+        self._tiled_server = "yes" if self._tiled_server_is_reachable() else "no"
         return self._tiled_server
 
     @command(dtype_out=str)
@@ -107,7 +110,7 @@ class DATA(Device):
         config = {
             "host": self._host,
             "port": self._port,
-            "uri": self._uri(),
+            "uri": self._tiled_uri(),
             "save_path": self._save_path,
             "tiled_server": self._tiled_server,
             "tiled_server_status": self._tiled_server_status,
@@ -130,18 +133,19 @@ class DATA(Device):
     @command(dtype_out=str)
     def start_tiled_server(self, timeout=30) -> str:
         """Start the catalog HTTP server without a filesystem watcher."""
-        if self._tiled_alive():
+        if self._tiled_server_is_reachable():
             self._tiled_server = "yes"
             self._tiled_server_status = "running; files register manually"
             return self.get_config()
 
         save_path = PureWindowsPath(self._save_path) if _is_windows_drive_path(self._save_path) else Path(self._save_path).expanduser()
         catalog = save_path / ".asyncroscopy_tiled_catalog.db"
-        catalog_database = _catalog_database_uri(catalog)
+        catalog_database = f"sqlite:///{catalog.as_posix()}" if _is_windows_drive_path(catalog) else str(catalog)
 
         try:
-            _ensure_directory(self._save_path)
-            command = [*self._tiled_command(), "catalog", "init", "--if-not-exists", catalog_database]
+            if not (_is_windows_drive_path(self._save_path) and os.name != "nt"):
+                Path(self._save_path).expanduser().mkdir(parents=True, exist_ok=True)
+            command = [sys.executable, "-m", "tiled", "catalog", "init", "--if-not-exists", catalog_database]
             subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         except subprocess.CalledProcessError as exc:
             self._tiled_server = "no"
@@ -154,7 +158,7 @@ class DATA(Device):
             return self.get_config()
 
         command = [
-            *self._tiled_command(), "serve", "catalog", catalog_database,
+            sys.executable, "-m", "tiled", "serve", "catalog", catalog_database,
             "--read", self._save_path, "--write", self._save_path,
             "--public", "--api-key", self._api_key,
             "--host", self._host, "--port", str(self._port),
@@ -162,11 +166,11 @@ class DATA(Device):
         self._tiled_process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT, text=True)
         self._tiled_serve_path = self._save_path
         deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline and not self._tiled_alive():
+        while time.monotonic() < deadline and not self._tiled_server_is_reachable():
             if self._tiled_process.poll() is not None:
                 break
             time.sleep(0.5)
-        self._tiled_server = "yes" if self._tiled_alive() else "no"
+        self._tiled_server = "yes" if self._tiled_server_is_reachable() else "no"
         if self._tiled_server == "yes":
             self._tiled_server_status = "running; serving path; files register manually"
         else:
@@ -175,8 +179,8 @@ class DATA(Device):
 
     @command(dtype_out=str)
     def stop_tiled_server(self) -> str:
-        self._stop_tiled_processes()
-        self._tiled_server = "yes" if self._tiled_alive() else "no"
+        self._stop_managed_tiled_server()
+        self._tiled_server = "yes" if self._tiled_server_is_reachable() else "no"
         self._tiled_server_status = "stopped managed Tiled processes"
         return self.get_config()
 
@@ -186,8 +190,8 @@ class DATA(Device):
         path = path.strip()
         key = PureWindowsPath(path).name if _is_windows_drive_path(path) else Path(path).name
 
-        async def register_with_tiled_client() -> None:
-            client = from_uri(self._uri(), api_key=self._api_key)
+        async def register_file_and_wait_for_key() -> None:
+            client = from_uri(self._tiled_uri(), api_key=self._api_key)
             await register(client, path, walkers=[ONE_NODE_PER_FILE_WALKER], key_from_filename=identity)
             if not hasattr(client, "__getitem__"):
                 return
@@ -202,7 +206,7 @@ class DATA(Device):
                     await asyncio.sleep(REGISTER_POLL_SECONDS)
 
         try:
-            asyncio.run(asyncio.wait_for(register_with_tiled_client(), REGISTER_TIMEOUT_SECONDS))
+            asyncio.run(asyncio.wait_for(register_file_and_wait_for_key(), REGISTER_TIMEOUT_SECONDS))
         except Exception as exc:
             message = (
                 f"File registration failed: {exc}\n\n"
@@ -280,12 +284,12 @@ class DATA(Device):
         """Register the configured save directory with Tiled once."""
         save_path = str(Path(self._save_path).expanduser())
 
-        async def register_directory_with_tiled_client() -> None:
-            client = from_uri(self._uri(), api_key=self._api_key)
-            await register(client, save_path, walkers=[ONE_NODE_PER_FILE_WALKER], key_from_filename=identity)
-
         try:
-            asyncio.run(asyncio.wait_for(register_directory_with_tiled_client(), REGISTER_SAVE_PATH_TIMEOUT_SECONDS))
+            client = from_uri(self._tiled_uri(), api_key=self._api_key)
+            asyncio.run(asyncio.wait_for(
+                register(client, save_path, walkers=[ONE_NODE_PER_FILE_WALKER], key_from_filename=identity),
+                REGISTER_SAVE_PATH_TIMEOUT_SECONDS,
+            ))
         except Exception as exc:
             message = (
                 f"Save path registration failed: {exc}\n\n"
@@ -304,31 +308,31 @@ class DATA(Device):
         self._tiled_server_status = result["tiled_server_status"]
         return json.dumps(result)
 
-    def _uri(self) -> str:
+    def _tiled_uri(self) -> str:
         return f"http://{self._host}:{self._port}"
 
-    def _tiled_alive(self) -> bool:
+    def _tiled_server_is_reachable(self) -> bool:
         try:
-            with urlopen(self._uri(), timeout=0.3):
+            with urlopen(self._tiled_uri(), timeout=0.3):
                 return True
         except (OSError, URLError):
             return False
 
-    def _synchronize_tiled_processes(self) -> None:
+    def _restart_managed_tiled_server(self) -> None:
         if self._tiled_process is not None and self._tiled_process.poll() is None:
             self.info_stream(f"Restarting managed Tiled server for save path: {self._save_path}")
-            self._stop_tiled_processes()
+            self._stop_managed_tiled_server()
             self.start_tiled_server()
             return
 
         self._tiled_process = None
         self._tiled_serve_path = None
-        if self._tiled_alive():
+        if self._tiled_server_is_reachable():
             self._tiled_server_status = "running externally; files register manually"
         else:
             self._tiled_server_status = "not running"
 
-    def _stop_tiled_processes(self) -> None:
+    def _stop_managed_tiled_server(self) -> None:
         process = self._tiled_process
         if process is not None and process.poll() is None:
             process.terminate()
@@ -340,31 +344,10 @@ class DATA(Device):
         self._tiled_process = None
         self._tiled_serve_path = None
 
-    @staticmethod
-    def _parse_uri(uri: str) -> tuple[str, int]:
-        without_scheme = uri.split("://", 1)[-1].strip("/")
-        host, _, port = without_scheme.partition(":")
-        return host or "10.46.217.241", int(port or 9091)
-
-    @staticmethod
-    def _tiled_command() -> list[str]:
-        return [sys.executable, "-m", "tiled"]
-
 
 def _is_windows_drive_path(path: str | Path | PureWindowsPath) -> bool:
     windows_path = PureWindowsPath(path)
     return bool(windows_path.drive)
-
-
-def _catalog_database_uri(path: str | Path | PureWindowsPath) -> str:
-    if _is_windows_drive_path(path):
-        return f"sqlite:///{PureWindowsPath(path).as_posix()}"
-    return str(Path(path).expanduser())
-
-
-def _ensure_directory(path: str | Path) -> None:
-    if not (_is_windows_drive_path(path) and os.name != "nt"):
-        Path(path).expanduser().mkdir(parents=True, exist_ok=True)
 
 
 if __name__ == "__main__":

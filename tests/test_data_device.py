@@ -8,7 +8,7 @@ import pytest
 import sidpy
 import tango
 
-from asyncroscopy.data.data import DATA, _catalog_database_uri
+from asyncroscopy.data.data import DATA
 
 
 class TestDataDevice:
@@ -73,8 +73,8 @@ class TestDataDevice:
         data_proxy.host = "127.0.0.1"
         data_proxy.port = 9091
         data_proxy.save_path = str(tmp_path)
-        monkeypatch.setattr(DATA, "_tiled_alive", fake_alive)
-        monkeypatch.setattr(DATA, "_tiled_command", lambda self: ["python", "-m", "tiled"])
+        monkeypatch.setattr(DATA, "_tiled_server_is_reachable", fake_alive)
+        monkeypatch.setattr("asyncroscopy.data.data.sys.executable", "python")
         monkeypatch.setattr("asyncroscopy.data.data.subprocess.Popen", fake_popen)
         monkeypatch.setattr(
             "asyncroscopy.data.data.subprocess.run",
@@ -111,7 +111,7 @@ class TestDataDevice:
         assert len(popen_calls) == 1
         actual_command = popen_calls[0]["command"]
 
-        expected_catalog = _catalog_database_uri(tmp_path / ".asyncroscopy_tiled_catalog.db")
+        expected_catalog = str(tmp_path / ".asyncroscopy_tiled_catalog.db")
 
         assert actual_command[:5] == expected_command[:5]
         assert actual_command[5] == expected_catalog
@@ -135,16 +135,6 @@ class TestDataDevice:
         ]
         assert run_commands[0][6] == expected_catalog
         data_proxy.stop_tiled_server()
-
-    def test_catalog_database_uri_uses_sqlite_uri_for_windows_drive_path(self) -> None:
-        assert (
-            _catalog_database_uri("C:/tiled_catalog_test/.asyncroscopy_tiled_catalog.db")
-            == "sqlite:///C:/tiled_catalog_test/.asyncroscopy_tiled_catalog.db"
-        )
-        assert (
-            _catalog_database_uri("C:\\tiled_catalog_test\\.asyncroscopy_tiled_catalog.db")
-            == "sqlite:///C:/tiled_catalog_test/.asyncroscopy_tiled_catalog.db"
-        )
 
     def test_start_tiled_server_uses_sqlite_uri_for_windows_catalog(
         self,
@@ -172,8 +162,8 @@ class TestDataDevice:
             def kill(self):
                 pass
 
-        monkeypatch.setattr(DATA, "_tiled_alive", fake_alive)
-        monkeypatch.setattr(DATA, "_tiled_command", lambda self: ["python", "-m", "tiled"])
+        monkeypatch.setattr(DATA, "_tiled_server_is_reachable", fake_alive)
+        monkeypatch.setattr("asyncroscopy.data.data.sys.executable", "python")
         monkeypatch.setattr("asyncroscopy.data.data.subprocess.Popen", lambda command, **kwargs: popen_calls.append(command) or FakeProcess())
         monkeypatch.setattr(
             "asyncroscopy.data.data.subprocess.run",
@@ -182,12 +172,6 @@ class TestDataDevice:
                 or type("Result", (), {"returncode": 0, "stdout": ""})()
             ),
         )
-        # The Windows drive path below is fed only to exercise the
-        # drive-path -> sqlite-URI branch; neutralize the mkdir side effect so
-        # the test does not depend on the path being creatable (a non-admin user
-        # cannot create directories under C:\, and the path can't exist on Linux).
-        monkeypatch.setattr("asyncroscopy.data.data._ensure_directory", lambda path: None)
-
         data_proxy.host = "127.0.0.1"
         data_proxy.port = 9091
         data_proxy.save_path = "C:/tiled_catalog_test"
@@ -414,8 +398,8 @@ class TestDataDevice:
             return self._tiled_process is not None and self._tiled_process.poll() is None
 
         run_commands = []
-        monkeypatch.setattr(DATA, "_tiled_alive", fake_alive)
-        monkeypatch.setattr(DATA, "_tiled_command", lambda self: ["python", "-m", "tiled"])
+        monkeypatch.setattr(DATA, "_tiled_server_is_reachable", fake_alive)
+        monkeypatch.setattr("asyncroscopy.data.data.sys.executable", "python")
         monkeypatch.setattr("asyncroscopy.data.data.subprocess.Popen", fake_popen)
         monkeypatch.setattr(
             "asyncroscopy.data.data.subprocess.run",

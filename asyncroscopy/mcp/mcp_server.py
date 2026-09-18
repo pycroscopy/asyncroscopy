@@ -125,12 +125,12 @@ class MCPServer:
         }
         datasets: list[dict[str, Any]] = []
 
-        def visit(current: Any, name: str = "") -> None:
-            read = getattr(current, "read", None)
+        def collect_dataset_previews(tiled_node: Any, name: str = "") -> None:
+            read = getattr(tiled_node, "read", None)
             if callable(read):
-                shape = tuple(getattr(current, "shape", ()) or ())
+                shape = tuple(getattr(tiled_node, "shape", ()) or ())
                 if limit == 0:
-                    array = np.asarray([], dtype=getattr(current, "dtype", float))
+                    array = np.asarray([], dtype=getattr(tiled_node, "dtype", float))
                 elif shape:
                     remaining = limit
                     slices = []
@@ -144,28 +144,24 @@ class MCPServer:
                 item: dict[str, Any] = {
                     "name": name,
                     "shape": list(shape or array.shape),
-                    "dtype": str(getattr(current, "dtype", array.dtype)),
+                    "dtype": str(getattr(tiled_node, "dtype", array.dtype)),
                     "attrs": self._numpy_to_python(
-                        dict(getattr(current, "metadata", {}) or {})
+                        dict(getattr(tiled_node, "metadata", {}) or {})
                     ),
                     "preview": self._numpy_to_python(array.reshape(-1)[:limit]),
                 }
                 datasets.append(item)
                 return
 
-            keys = getattr(current, "keys", None)
+            keys = getattr(tiled_node, "keys", None)
             if callable(keys):
                 for child_name in keys():
                     child_path = f"{name}/{child_name}" if name else str(child_name)
-                    visit(current[child_name], child_path)
+                    collect_dataset_previews(tiled_node[child_name], child_path)
 
-        visit(node)
+        collect_dataset_previews(node)
         result["datasets"] = datasets
         return result
-
-    @staticmethod
-    def _hdf5_attrs_to_json(attrs: Any) -> dict[str, Any]:
-        return {key: MCPServer._numpy_to_python(value) for key, value in attrs.items()}
 
     @staticmethod
     def _tango_type_to_python(cmd_type: CmdArgType) -> Any:

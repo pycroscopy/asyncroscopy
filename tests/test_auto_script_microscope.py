@@ -141,10 +141,7 @@ class TestAutoScriptMicroscope:
         microscope._microscope = types.SimpleNamespace(acquisition=acquisition)
         microscope._detector_proxies = {"data": FakeDataServer()}
 
-        def fake_new_path(device, acquisition_type: str, detector: str, data_server=None, extension="h5"):
-            return tmp_path / f"{acquisition_type}_{detector}.h5"
-
-        monkeypatch.setattr("asyncroscopy.data.data_writer.acquisition_filename", fake_new_path)
+        microscope._detector_proxies["data"].save_path = str(tmp_path)
 
         saved_path = AutoScriptMicroscope._acquire_scanned_image(
             microscope,
@@ -275,14 +272,7 @@ class TestAutoScriptMicroscope:
         microscope._microscope = types.SimpleNamespace(acquisition=acquisition)
         microscope._detector_proxies = {"data": FakeDataServer()}
 
-        def fake_new_path(
-            device, acquisition_type: str, detector: str, data_server=None, extension="h5"
-        ):
-            return tmp_path / f"{acquisition_type}_{detector}.{extension}"
-
-        monkeypatch.setattr(
-            "asyncroscopy.data.data_writer.acquisition_filename", fake_new_path
-        )
+        microscope._detector_proxies["data"].save_path = str(tmp_path)
 
         result = AutoScriptMicroscope._acquire_camera_image(
             microscope,
@@ -359,10 +349,7 @@ class TestAutoScriptMicroscope:
         microscope._microscope = types.SimpleNamespace(analysis=types.SimpleNamespace(eds=eds))
         microscope._detector_proxies = {"data": FakeDataServer()}
 
-        def fake_new_path(device, acquisition_type: str, detector: str, data_server=None, extension="h5"):
-            return tmp_path / f"{acquisition_type}_{detector}.{extension}"
-
-        monkeypatch.setattr("asyncroscopy.data.data_writer.acquisition_filename", fake_new_path)
+        microscope._detector_proxies["data"].save_path = str(tmp_path)
 
         result = AutoScriptMicroscope._acquire_spectrum(microscope, "eds", 0.25)
 
