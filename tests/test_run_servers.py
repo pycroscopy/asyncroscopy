@@ -13,7 +13,7 @@ class FakeDataProxy:
     def stop_tiled_server(self):
         self.stop_called = True
 
-    def register_save_path(self):
+    def register_existing_directory(self):
         self.register_called = True
         return '{"registered_path": "outputs/tiled_acquisitions"}'
 
@@ -36,11 +36,11 @@ def test_stop_tiled_server_uses_extended_data_proxy_timeout(monkeypatch):
     assert proxy.stop_called is True
 
 
-def test_register_tiled_save_path_uses_startup_registration_timeout(monkeypatch):
+def test_register_existing_tiled_directory_uses_startup_registration_timeout(monkeypatch):
     proxy = FakeDataProxy()
     monkeypatch.setattr(run_servers.tango, "DeviceProxy", lambda _: proxy)
 
-    result = run_servers.register_tiled_save_path()
+    result = run_servers.register_existing_tiled_directory()
 
     assert proxy.timeout_millis == run_servers.TILED_STARTUP_REGISTRATION_TIMEOUT_MILLIS
     assert proxy.register_called is True

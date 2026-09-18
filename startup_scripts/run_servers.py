@@ -419,10 +419,10 @@ def get_data_proxy() -> tango.DeviceProxy:
     return data
 
 
-def register_tiled_save_path() -> dict:
+def register_existing_tiled_directory() -> dict:
     data = get_data_proxy()
     data.set_timeout_millis(TILED_STARTUP_REGISTRATION_TIMEOUT_MILLIS)
-    return json.loads(data.register_save_path())
+    return json.loads(data.register_existing_directory())
 
 
 def stop_tiled_server() -> None:
@@ -641,7 +641,7 @@ def main(argv: list[str] | None = None) -> int:
                 
                 if should_register_tiled:
                     status_line("WAIT", "Tiled startup registration", "registering acquisition directory; this can take a while")
-                    tiled_registration = register_tiled_save_path()
+                    tiled_registration = register_existing_tiled_directory()
                     tiled_config.update(tiled_registration)
                     status_line("OK", "Tiled startup registration", tiled_registration["registered_path"])
                 else:

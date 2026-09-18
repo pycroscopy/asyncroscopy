@@ -14,7 +14,7 @@ class FakeDataServer:
         self.save_path = str(save_path)
         self.registered_paths = []
 
-    def register_path(self, path: str) -> str:
+    def register_acquisition_file(self, path: str) -> str:
         self.registered_paths.append(path)
         return Path(path).name
 

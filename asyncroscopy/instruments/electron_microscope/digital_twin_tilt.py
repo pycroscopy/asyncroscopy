@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
-from pathlib import Path
 
 import numpy as np
 import tango
@@ -12,10 +10,7 @@ from ase import Atoms
 from ase.build import bulk
 from tango.server import device_property
 
-from asyncroscopy.data.data_writer import (
-    save_acquisition,
-    save_acquisition_hdf5,
-)
+from asyncroscopy.data.data_writer import save_acquisition
 from asyncroscopy.instruments.electron_microscope.digital_twin import (
     DEFAULT_ACQUISITION_DIR,
     DigitalTwin,
@@ -718,15 +713,9 @@ class DigitalTwinTilt(DigitalTwin):
             ],
         }
         data_server = self._detector_proxies.get("data")
-        save_directory = (data_server.save_path if data_server is not None
-                          else getattr(self, "acquisition_save_directory", DEFAULT_ACQUISITION_DIR))
-        directory = Path(save_directory).expanduser()
-        directory.mkdir(parents=True, exist_ok=True)
-        timestamp = datetime.now().strftime("%Y%m%dT%H%M%S%f")
-        path = directory / f"stem_data_{detector}_{timestamp}.h5"
-        save_acquisition_hdf5(
-            path,
-            [
+        return save_acquisition(
+            self, data_server, "stem_data", detector,
+            datasets=[
                 {"name": "stem_data", "source": datacube, "attrs": attrs},
                 {
                     "name": "simulation/lattice_parameter_angstrom",
@@ -755,7 +744,6 @@ class DigitalTwinTilt(DigitalTwin):
                 },
             ],
         )
-        return data_server.register_path(str(path)) if data_server is not None else str(path)
 
     def _move_stage(self, position) -> None:
         target = np.asarray(position, dtype=np.float64)

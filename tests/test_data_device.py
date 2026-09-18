@@ -2,10 +2,7 @@ import json
 import subprocess
 from pathlib import Path
 
-import h5py
-import numpy as np
 import pytest
-import sidpy
 import tango
 
 from asyncroscopy.data.data import DATA
@@ -185,7 +182,7 @@ class TestDataDevice:
         assert popen_calls[0][5] == expected_catalog
         data_proxy.stop_tiled_server()
 
-    def test_register_path_registers_single_file(
+    def test_register_acquisition_file_registers_single_file(
         self,
         data_proxy: tango.DeviceProxy,
         monkeypatch,
@@ -206,75 +203,12 @@ class TestDataDevice:
         monkeypatch.setattr("asyncroscopy.data.data.from_uri", fake_from_uri)
         monkeypatch.setattr("asyncroscopy.data.data.register", fake_register)
 
-        result = data_proxy.register_path(str(saved))
+        result = data_proxy.register_acquisition_file(str(saved))
 
         assert result == "frame.h5"
         assert registrations == [str(saved)]
 
-    def test_copy_and_register_remote_mrc_writes_atomic_hdf5(self, data_proxy: tango.DeviceProxy, monkeypatch, tmp_path) -> None:
-        source_directory = tmp_path / "autoscript"
-        destination_directory = tmp_path / "acquisitions"
-        source_directory.mkdir()
-        source = source_directory / "scan.mrc"
-        source.write_bytes(b"AutoScript MRC fixture")
-        source_data = np.arange(24, dtype=np.uint16).reshape(2, 2, 3, 2)
-        source_dataset = sidpy.Dataset.from_array(source_data, name="MRC_000", chunks=(1, 1, 3, 2))
-        source_dataset.data_type = "image_4d"
-        source_dataset.original_metadata = {
-            "Pixel size X": np.array([0.5]),
-            "Pixel size Y": np.array([0.5]),
-        }
-
-        class FakeMRCReader:
-            def __init__(self, path):
-                assert path == str(source)
-
-            def read(self):
-                return {"Channel_000": source_dataset}
-
-        registrations = []
-
-        def fake_from_uri(*args, **kwargs):
-            return object()
-
-        async def fake_register(client, path, **kwargs):
-            registrations.append(path)
-
-        monkeypatch.setattr("asyncroscopy.data.data.from_uri", fake_from_uri)
-        monkeypatch.setattr("asyncroscopy.data.data.register", fake_register)
-        monkeypatch.setattr("asyncroscopy.data.data.MRCReader", FakeMRCReader)
-        data_proxy.save_path = str(destination_directory)
-
-        request = {
-            "source_path": str(source),
-            "detector": "BM-Ceta",
-            "scan_shape": [2, 2],
-            "dwell_time": 1e-3,
-            "scan_region": [0.0, 0.0, 1.0, 1.0],
-        }
-        key = data_proxy.copy_and_register_remote_file(json.dumps(request))
-
-        destination = destination_directory / key
-        assert source.is_file()
-        assert destination.is_file()
-        assert registrations == [str(destination)]
-        assert not list(destination_directory.glob("*.partial"))
-        with h5py.File(destination, "r") as h5:
-            assert h5["stem_data"].shape == (2, 2, 3, 2)
-            np.testing.assert_array_equal(h5["stem_data"][()], source_data)
-            assert h5["stem_data"].attrs["detector"] == "BM-Ceta"
-            assert json.loads(h5["stem_data"].attrs["scan_shape"]) == [2, 2]
-            metadata = json.loads(h5.attrs["source_mrc_metadata_json"])
-            assert metadata["Pixel size X"] == [0.5]
-
-    def test_copy_and_register_remote_file_rejects_non_mrc(self, data_proxy: tango.DeviceProxy, tmp_path) -> None:
-        source = tmp_path / "scan.txt"
-        source.write_text("not an MRC")
-
-        with pytest.raises(tango.DevFailed, match="Expected an MRC source file"):
-            data_proxy.copy_and_register_remote_file(json.dumps({"source_path": str(source)}))
-
-    def test_register_save_path_registers_configured_directory(
+    def test_register_existing_directory_registers_configured_directory(
         self,
         data_proxy: tango.DeviceProxy,
         monkeypatch,
@@ -294,13 +228,13 @@ class TestDataDevice:
         monkeypatch.setattr("asyncroscopy.data.data.from_uri", fake_from_uri)
         monkeypatch.setattr("asyncroscopy.data.data.register", fake_register)
 
-        result = json.loads(data_proxy.register_save_path())
+        result = json.loads(data_proxy.register_existing_directory())
 
         assert result["registered_path"] == str(tmp_path)
         assert result["tiled_server_status"] == "running; registered save path"
         assert registrations == [str(tmp_path)]
 
-    def test_register_path_returns_windows_tiled_key(
+    def test_register_acquisition_file_returns_windows_tiled_key(
         self,
         data_proxy: tango.DeviceProxy,
         monkeypatch,
@@ -318,9 +252,9 @@ class TestDataDevice:
         monkeypatch.setattr("asyncroscopy.data.data.from_uri", fake_from_uri)
         monkeypatch.setattr("asyncroscopy.data.data.register", fake_register)
 
-        assert data_proxy.register_path(windows_path) == "frame.h5"
+        assert data_proxy.register_acquisition_file(windows_path) == "frame.h5"
 
-    def test_register_path_waits_until_tiled_key_is_readable(
+    def test_register_acquisition_file_waits_until_tiled_key_is_readable(
         self,
         data_proxy: tango.DeviceProxy,
         monkeypatch,
@@ -357,7 +291,7 @@ class TestDataDevice:
         monkeypatch.setattr("asyncroscopy.data.data.register", fake_register)
         monkeypatch.setattr("asyncroscopy.data.data.asyncio.sleep", fake_sleep)
 
-        assert data_proxy.register_path(str(saved)) == "frame.h5"
+        assert data_proxy.register_acquisition_file(str(saved)) == "frame.h5"
         assert fake_client.calls == 3
         assert sleeps == [0.25, 0.25]
 
@@ -425,7 +359,7 @@ class TestDataDevice:
 
         data_proxy.stop_tiled_server()
 
-    def test_register_path_error_reports_save_and_serving_paths(
+    def test_register_acquisition_file_error_reports_save_and_serving_paths(
         self,
         data_proxy: tango.DeviceProxy,
         monkeypatch,
@@ -442,7 +376,7 @@ class TestDataDevice:
         monkeypatch.setattr("asyncroscopy.data.data.register", fake_register)
 
         with pytest.raises(tango.DevFailed) as exc_info:
-            data_proxy.register_path(str(requested_path))
+            data_proxy.register_acquisition_file(str(requested_path))
 
         message = str(exc_info.value)
         status = json.loads(data_proxy.get_config())["tiled_server_status"]

@@ -19,16 +19,12 @@ from asyncroscopy.instruments.electron_microscope.auto_script import AutoScriptM
 
 class FakeDataServer:
     def __init__(self, save_path=None) -> None:
-        self.copy_requests = []
         if save_path is not None:
             self.save_path = str(save_path)
 
-    def register_path(self, path: str) -> str:
+    def register_acquisition_file(self, path: str) -> str:
         return path
 
-    def copy_and_register_remote_file(self, request_json: str) -> str:
-        self.copy_requests.append(json.loads(request_json))
-        return "registered-stem-data.h5"
 
 
 class TestAutoScriptMicroscope:

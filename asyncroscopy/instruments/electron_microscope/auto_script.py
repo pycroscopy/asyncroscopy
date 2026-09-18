@@ -338,7 +338,7 @@ class AutoScriptMicroscope(ElectronMicroscope):
             "dwell_time": float(dwell_time),
             "scan_region": list(scan_region),
         }
-        return data_server.copy_and_register_remote_file(json.dumps(request))
+        # MRC conversion is archived in asyncroscopy/data/data_reader.py.
         '''
 
     def _acquire_scanned_data_advanced(self, imsize: int, dwell_time: float, detector: str, scan_region: list[float]) -> str:

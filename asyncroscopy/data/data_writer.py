@@ -18,17 +18,18 @@ def save_acquisition(
     data_server,
     acquisition_type: str,
     detectors,
-    data,
+    data=None,
     dataset_name: str = "image",
     dataset_attrs: dict | list[dict] | None = None,
     file_attrs: dict | None = None,
+    *,
+    datasets: list[dict] | None = None,
 ) -> str:
-    """Save one HDF5 acquisition and return its DATA/Tiled key or local path."""
-    detector_list = list(detectors) if isinstance(detectors, (list, tuple)) else [detectors]
-    sources = list(data) if isinstance(data, (list, tuple)) else [data]
-    dataset_attributes = dataset_attrs if isinstance(dataset_attrs, list) else [dataset_attrs] * len(sources)
+    """Save HDF5 and return its DATA/Tiled key or local path.
 
-    include_detector_in_path = len(detector_list) > 1 or len(sources) > 1
+    Explicit ``datasets`` supply exact names, sources, and attributes.
+    """
+    detector_list = list(detectors) if isinstance(detectors, (list, tuple)) else [detectors]
     detector_label = "_".join([str(detector) for detector in detector_list])
     save_directory = (data_server.save_path if data_server is not None
                       else getattr(device, "acquisition_save_directory", DEFAULT_ACQUISITION_DIR))
@@ -37,23 +38,21 @@ def save_acquisition(
     timestamp = datetime.now().strftime("%Y%m%dT%H%M%S%f")
     path = directory / f"{acquisition_type}_{detector_label}_{timestamp}.h5"
 
-    datasets = []
-    for index, source in enumerate(sources):
-        detector = str(detector_list[index]) if index < len(detector_list) else f"item_{index}"
-        if dataset_name == "image" and isinstance(detectors, (list, tuple)):
-            name = f"image/{detector}"
-        else:
-            name = f"{dataset_name}/{detector}" if include_detector_in_path else dataset_name
-        attrs = {"acquisition_type": acquisition_type, "detector": detector}
-        attrs.update(dataset_attributes[index] or {})
-        datasets.append({"name": name, "source": source, "attrs": attrs})
+    if datasets is None:
+        sources = list(data) if isinstance(data, (list, tuple)) else [data]
+        dataset_attributes = dataset_attrs if isinstance(dataset_attrs, list) else [dataset_attrs] * len(sources)
+        include_detector_in_path = len(detector_list) > 1 or len(sources) > 1
+        datasets = []
+        for index, source in enumerate(sources):
+            detector = str(detector_list[index]) if index < len(detector_list) else f"item_{index}"
+            if dataset_name == "image" and isinstance(detectors, (list, tuple)):
+                name = f"image/{detector}"
+            else:
+                name = f"{dataset_name}/{detector}" if include_detector_in_path else dataset_name
+            attrs = {"acquisition_type": acquisition_type, "detector": detector}
+            attrs.update(dataset_attributes[index] or {})
+            datasets.append({"name": name, "source": source, "attrs": attrs})
 
-    save_acquisition_hdf5(path, datasets, file_attrs=file_attrs)
-    return data_server.register_path(str(path)) if data_server is not None else str(path)
-
-
-def save_acquisition_hdf5(path: str | Path, datasets: list[dict], file_attrs: dict | None = None) -> None:
-    """Write arrays and metadata attributes to one HDF5 file."""
     with h5py.File(path, "w", track_order=True) as h5:
         for key, value in (file_attrs or {}).items():
             h5.attrs[key] = value if isinstance(value, (str, int, float, bool, np.number)) else json.dumps(value)
@@ -85,3 +84,5 @@ def save_acquisition_hdf5(path: str | Path, datasets: list[dict], file_attrs: di
             elif isinstance(metadata, dict):
                 for key, value in metadata.items():
                     dataset.attrs[key] = value if isinstance(value, (str, int, float, bool, np.number)) else json.dumps(value)
+
+    return data_server.register_acquisition_file(str(path)) if data_server is not None else str(path)
