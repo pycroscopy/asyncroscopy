@@ -13,14 +13,12 @@ class TestCAMERAAttributes:
         camera_proxy.readout_area = "Full"
         camera_proxy.camera_detector = "BM-Ceta"
         camera_proxy.frame_combining = 1
-        camera_proxy.output_format = ".h5"
 
         assert camera_proxy.exposure_time == pytest.approx(1e-3)
         assert camera_proxy.imsize == 1024
         assert camera_proxy.readout_area == "Full"
         assert camera_proxy.camera_detector == "BM-Ceta"
         assert camera_proxy.frame_combining == 1
-        assert camera_proxy.output_format == ".h5"
 
     def test_write_all_settings(self, camera_proxy):
         camera_proxy.exposure_time = 0.5
@@ -28,21 +26,18 @@ class TestCAMERAAttributes:
         camera_proxy.readout_area = "Half"
         camera_proxy.camera_detector = "EF-Ceta"
         camera_proxy.frame_combining = 6
-        camera_proxy.output_format = ".tiff"
 
         assert camera_proxy.exposure_time == pytest.approx(0.5)
         assert camera_proxy.imsize == 2048
         assert camera_proxy.readout_area == "Half"
         assert camera_proxy.camera_detector == "EF-Ceta"
         assert camera_proxy.frame_combining == 6
-        assert camera_proxy.output_format == ".tiff"
 
     @pytest.mark.parametrize(
         ("attribute", "value"),
         [
             ("readout_area", "Third"),
             ("camera_detector", "Unknown-Camera"),
-            ("output_format", ".png"),
         ],
     )
     def test_rejects_unsupported_string_settings(

@@ -158,7 +158,6 @@ class JeolMicroscope(ElectronMicroscope):
         dwell_time: float,
         detector_list: list[str] = ['haadf'],
         scan_region: list[float] = [0.0, 0.0, 1.0, 1.0],
-        output_format: str = '.h5',
     ) -> str:
         """
         Acquire a STEM scan over the requested detectors via the PyJEM
@@ -203,7 +202,7 @@ class JeolMicroscope(ElectronMicroscope):
         data_server = self._detector_proxies.get('data')
         return save_acquisition(
             self, data_server, 'stem_image', detector_list, images,
-            dataset_attrs=image_settings, output_format=output_format,
+            dataset_attrs=image_settings,
         )
 
     def _acquire_spectrum(self, detector_name: str, exposure_time: float) -> str:

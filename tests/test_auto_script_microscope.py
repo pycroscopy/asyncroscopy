@@ -242,7 +242,6 @@ class TestAutoScriptMicroscope:
         camera_proxy.readout_area = "Half"
         camera_proxy.camera_detector = "BM-Ceta"
         camera_proxy.frame_combining = 6
-        camera_proxy.output_format = ".h5"
 
         saved_path = auto_script_proxy.acquire_camera_image()
 
@@ -254,7 +253,6 @@ class TestAutoScriptMicroscope:
                 "detector": "BM-Ceta",
                 "readout_area": "Half",
                 "frame_combining": 6,
-                "output_format": ".h5",
             }
         ]
 
@@ -306,31 +304,6 @@ class TestAutoScriptMicroscope:
             assert h5["image"].attrs["acquisition_type"] == "camera_image"
             assert h5["image"].attrs["detector"] == "BM-Ceta"
 
-    def test_camera_image_helper_honors_tiff_output(self, tmp_path) -> None:
-        class FakeImage:
-            data = np.array([[1, 2], [3, 4]], dtype=np.uint16)
-
-        class FakeAcquisition:
-            def acquire_camera_image_advanced(self, settings):
-                return FakeImage()
-
-        microscope = AutoScriptMicroscope.__new__(AutoScriptMicroscope)
-        microscope._microscope = types.SimpleNamespace(
-            acquisition=FakeAcquisition()
-        )
-        microscope._detector_proxies = {"data": FakeDataServer(tmp_path)}
-
-        stem = AutoScriptMicroscope._acquire_camera_image(
-            microscope,
-            imsize=512,
-            exposure_time=0.1,
-            detector="BM-Ceta",
-            readout_area="Full",
-            output_format=".tiff",
-        )
-
-        assert (tmp_path / f"{stem}_BM-Ceta.tiff").exists()
-
     def test_camera_device_can_select_flucam(
         self,
         auto_script_proxy: tango.DeviceProxy,
@@ -342,7 +315,6 @@ class TestAutoScriptMicroscope:
         camera_proxy.imsize = 1024
         camera_proxy.readout_area = "Full"
         camera_proxy.frame_combining = 1
-        camera_proxy.output_format = ".h5"
 
         saved_path = auto_script_proxy.acquire_camera_image()
 
@@ -354,7 +326,6 @@ class TestAutoScriptMicroscope:
                 "detector": "Flucam",
                 "readout_area": "Full",
                 "frame_combining": 1,
-                "output_format": ".h5",
             }
         ]
 

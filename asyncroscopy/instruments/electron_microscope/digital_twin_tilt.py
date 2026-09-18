@@ -564,7 +564,6 @@ class DigitalTwinTilt(DigitalTwin):
         dwell_time: float,
         detector_list: list[str] = ["haadf"],
         scan_region: list[float] = [0.0, 0.0, 1.0, 1.0],
-        output_format: str = ".h5",
     ) -> str:
         detector_list = [detector.upper() for detector in detector_list]
         images = [
@@ -589,7 +588,6 @@ class DigitalTwinTilt(DigitalTwin):
             detector_list,
             images,
             dataset_attrs=attrs,
-            output_format=output_format,
         )
 
     def _acquire_camera_image(
@@ -599,7 +597,6 @@ class DigitalTwinTilt(DigitalTwin):
         detector: str,
         readout_area: str,
         frame_combining: int = 1,
-        output_format: str = ".h5",
     ) -> str:
         self._sync_stage_from_proxy()
         material, local_x, local_y = self._beam_material()
@@ -651,7 +648,6 @@ class DigitalTwinTilt(DigitalTwin):
             diffraction,
             dataset_name="image",
             dataset_attrs=attrs,
-            output_format=output_format,
         )
 
     def _acquire_scanned_data_advanced(

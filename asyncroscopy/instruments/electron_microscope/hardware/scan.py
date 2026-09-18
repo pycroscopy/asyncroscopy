@@ -45,13 +45,6 @@ class SCAN(Device):
         doc="Relative scan rectangle [left, top, width, height] in the range [0, 1]",
     )
 
-    output_format = attribute(
-        label="Output Format",
-        dtype=str,
-        access=AttrWriteType.READ_WRITE,
-        doc="Output format for acquired images: '.h5' (default, one file with sub-groups per detector) or '.tiff' (one Velox-compatible TIFF per detector, metadata embedded by AutoScript)",
-    )
-
     # ------------------------------------------------------------------
     # Initialisation
     # ------------------------------------------------------------------
@@ -62,7 +55,6 @@ class SCAN(Device):
         self._dwell_time: float = 1e-6
         self._imsize: int = 512
         self._scan_region: list[float] = [0.0, 0.0, 1.0, 1.0]
-        self._output_format: str = ".h5"
         self.info_stream("SCAN device initialised")
 
     # ------------------------------------------------------------------
@@ -86,12 +78,6 @@ class SCAN(Device):
 
     def write_scan_region(self, value) -> None:
         self._scan_region = self._validate_scan_region(value)
-
-    def read_output_format(self) -> str:
-        return self._output_format
-
-    def write_output_format(self, value: str) -> None:
-        self._output_format = value
 
     # ------------------------------------------------------------------
     # Internal helpers

@@ -258,7 +258,6 @@ class AutoScriptMicroscope(ElectronMicroscope):
         dwell_time: float,
         detector_list: list[str] = ["haadf"],
         scan_region: list[float] = [0.0, 0.0, 1.0, 1.0],
-        output_format: str = ".h5",
     ) -> str:
         """
         Call AutoScript scanned image acquisition, save it, and return its DATA/Tiled key.
@@ -269,7 +268,7 @@ class AutoScriptMicroscope(ElectronMicroscope):
         if not isinstance(adorned, list):
             adorned = [adorned]
         data_server = self._detector_proxies.get("data")
-        return save_acquisition(self, data_server, "stem_image", detector_list, adorned, output_format=output_format)
+        return save_acquisition(self, data_server, "stem_image", detector_list, adorned)
 
 
     def _acquire_camera_image(
@@ -279,7 +278,6 @@ class AutoScriptMicroscope(ElectronMicroscope):
         detector: str,
         readout_area: str,
         frame_combining: int = 1,
-        output_format: str = ".h5",
     ) -> str:
         """
         Call advanced AutoScript camera acquisition, save the adorned image,
@@ -306,7 +304,6 @@ class AutoScriptMicroscope(ElectronMicroscope):
             "camera_image",
             str(detector),
             adorned,
-            output_format=output_format,
         )
 
 

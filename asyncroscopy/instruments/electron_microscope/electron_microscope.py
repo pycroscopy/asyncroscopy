@@ -118,7 +118,7 @@ class ElectronMicroscope(Instrument):
         The default detector list is ['haadf'].
         """
         scan = self._detector_proxies.get('scan')
-        return self._acquire_scanned_image(scan.imsize, scan.dwell_time, detector_list, list(scan.scan_region), scan.output_format)
+        return self._acquire_scanned_image(scan.imsize, scan.dwell_time, detector_list, list(scan.scan_region))
 
     @command(dtype_out=str)
     def acquire_scanned_data_advanced(self) -> str:
@@ -136,7 +136,6 @@ class ElectronMicroscope(Instrument):
             camera.camera_detector,
             camera.readout_area,
             camera.frame_combining,
-            camera.output_format,
         )
 
     @command(dtype_in=int, dtype_out=DevEncoded)
@@ -282,7 +281,6 @@ class ElectronMicroscope(Instrument):
         dwell_time: float,
         detector_list: list[str] = ['haadf'],
         scan_region: list[float] = [0.0, 0.0, 1.0, 1.0],
-        output_format: str = '.h5',
     ) -> str:
         """Vendor-specific scanned image acquisition implementation."""
         pass
@@ -294,7 +292,6 @@ class ElectronMicroscope(Instrument):
         detector: str,
         readout_area: str,
         frame_combining: int = 1,
-        output_format: str = '.h5',
     ) -> str:
         """Vendor-specific camera acquisition implementation."""
         tango.Except.throw_exception(

@@ -239,12 +239,12 @@ class PolycrystallineGoldDigitalTwin(DigitalTwin):
         blur_noise /= blur_noise.max() if blur_noise.max() > 0 else 1.0
         return np.asarray(noisy + blur_noise * float(self.blur_noise_level), dtype=np.float32)
 
-    def _acquire_scanned_image(self, imsize: int, dwell_time: float, detector_list: list[str] = ["haadf"], scan_region: list[float] = [0.0, 0.0, 1.0, 1.0], output_format: str = ".h5") -> str:
+    def _acquire_scanned_image(self, imsize: int, dwell_time: float, detector_list: list[str] = ["haadf"], scan_region: list[float] = [0.0, 0.0, 1.0, 1.0]) -> str:
         detector_list = [detector.upper() for detector in detector_list]
         images = [self._render_stem_image(int(imsize), float(dwell_time)) for _detector in detector_list]
         metadata = {**self._sample_metadata, "last_rendered_atom_count": self._last_rendered_atom_count, "raw_potential_cache_hits": self._raw_potential_cache_hits, "defocus_m": self._get_defocus(), "corrector_aberrations": self._corrector_coefficients()}
         attrs = [metadata.copy() for _image in images]
-        return save_acquisition(self, self._detector_proxies.get("data"), "stem_image", detector_list, images, dataset_attrs=attrs, file_attrs=metadata, output_format=output_format)
+        return save_acquisition(self, self._detector_proxies.get("data"), "stem_image", detector_list, images, dataset_attrs=attrs, file_attrs=metadata)
 
     @command(dtype_out=str)
     def get_volume_metadata(self) -> str:

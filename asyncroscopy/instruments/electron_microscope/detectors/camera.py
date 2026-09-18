@@ -23,7 +23,6 @@ class CAMERA(Device):
         "EF-Empad",
     }
     _READOUT_AREAS = {"Full", "Half", "Quarter"}
-    _OUTPUT_FORMATS = {".h5", ".tiff"}
 
     # ------------------------------------------------------------------
     # Attributes
@@ -70,13 +69,6 @@ class CAMERA(Device):
         doc="Number of sub-frames combined by the camera (Ceta-specific).",
     )
 
-    output_format = attribute(
-        label="Output Format",
-        dtype=str,
-        access=AttrWriteType.READ_WRITE,
-        doc="Saved image format: '.h5' or '.tiff'.",
-    )
-
     # ------------------------------------------------------------------
     # Initialisation
     # ------------------------------------------------------------------
@@ -91,7 +83,6 @@ class CAMERA(Device):
         self._readout_area: str = "Full"
         self._camera_detector: str = "BM-Ceta"
         self._frame_combining: int = 1
-        self._output_format: str = ".h5"
 
         self.info_stream("CAMERA device initialised")
 
@@ -140,16 +131,6 @@ class CAMERA(Device):
         if value < 1:
             raise ValueError("frame_combining must be at least 1")
         self._frame_combining = value
-
-    def read_output_format(self) -> str:
-        return self._output_format
-
-    def write_output_format(self, value: str) -> None:
-        if value not in self._OUTPUT_FORMATS:
-            raise ValueError(
-                f"Unsupported output_format {value!r}; expected '.h5' or '.tiff'"
-            )
-        self._output_format = value
 
 
 # ----------------------------------------------------------------------

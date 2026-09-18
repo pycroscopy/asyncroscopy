@@ -132,7 +132,6 @@ class DigitalTwinParticles(DigitalTwin):
         dwell_time: float,
         detector_list: list[str] = ["haadf"],
         scan_region: list[float] = [0.0, 0.0, 1.0, 1.0],
-        output_format: str = ".h5",
     ) -> str:
         """
         Acquire a simulated STEM image using the pre-cooked sample state.
@@ -313,7 +312,6 @@ class DigitalTwinParticles(DigitalTwin):
                 "voxel_size_angstrom": float(self._vox_size),
                 "stage_position": list(self._get_stage()),
             },
-            output_format=output_format,
         )
 
     def _make_sample_recipe(self):

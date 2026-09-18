@@ -4,7 +4,6 @@ import types
 import h5py
 import numpy as np
 
-import tifffile
 
 from asyncroscopy.data.data_writer import save_acquisition, save_acquisition_hdf5
 
@@ -82,21 +81,3 @@ def test_save_acquisition_writes_scanned_images_as_ordered_image_detector_datase
         for index, detector in enumerate(detectors):
             assert h5[f"image/{detector}"][()].tolist() == images[index].tolist()
             assert h5[f"image/{detector}"].attrs["detector"] == detector
-
-
-def test_save_acquisition_tiff_writes_one_registered_file_per_detector(tmp_path):
-    data_server = FakeDataServer(tmp_path)
-    detectors = ["HAADF", "BF-S"]
-    images = [np.full((2, 2), index, dtype=np.int16) for index in range(len(detectors))]
-    # JEOL passes a get_detectorsetting()-style dict per detector; it should be
-    # json-encoded into each TIFF's ImageDescription (nested dicts included).
-    attrs = [{"GainIndex": index, "ImagingArea": {"Width": 512}} for index in range(len(detectors))]
-
-    stem = save_acquisition(object(), data_server, "stem_image", detectors, images, dataset_attrs=attrs, output_format=".tiff")
-
-    for index, detector in enumerate(detectors):
-        path = tmp_path / f"{stem}_{detector}.tiff"
-        assert path.exists()
-        assert np.array_equal(tifffile.imread(path), images[index])
-        with tifffile.TiffFile(path) as tif:
-            assert json.loads(tif.pages[0].description) == attrs[index]

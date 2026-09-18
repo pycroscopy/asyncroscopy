@@ -41,7 +41,6 @@ dependencies = [
     "pyqt5-qt5==5.15.2; sys_platform == 'win32'",
     "pyqt6>=6.8,<6.13",
     "ipympl>=0.10.0",
-    "tifffile>=2026.5.15",
     "pyro5>=5.17",
 ]
 

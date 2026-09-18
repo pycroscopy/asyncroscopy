@@ -4,15 +4,10 @@
 subclass of [`ElectronMicroscope`](modify_base_electron_microscope.md). It owns the AutoScript
 connection and implements the `_helper` methods the base declares abstract.
 
-**Image helpers end via `_persist`; spectrum and STEM-data helpers via
-`save_acquisition` directly.** `_persist` reads `scan.output_format` and
-dispatches: `.h5` → `save_acquisition` (one HDF5 file, nested per detector),
-`.tiff` → AutoScript `image.save()` (one file per detector). Either path
-registers via the `data` proxy (`asyncroscopy/data/data.py`) and returns the
-**Tiled key (`.h5`) or shared stem (`.tiff`)** the command sends to the client.
-`save_acquisition` lives in `asyncroscopy/data/data_writer.py`; `data_server`
-comes from `self._detector_proxies.get("data")`. See
-[data_integration.md](../Tiled_server/data_integration.md).
+Acquisition helpers call `save_acquisition` in `asyncroscopy/data/data_writer.py`
+to write HDF5 data and metadata, then register the file through
+`self._detector_proxies.get("data")`. They return the Tiled key, or a local path
+when DATA is absent. See [data_integration.md](../Tiled_server/data_integration.md).
 
 If you're editing this class, you're usually doing one of these:
 
@@ -31,8 +26,7 @@ If you're editing this class, you're usually doing one of these:
 
 3. **Implementing or changing a `_helper`**
    Implement the base's abstract `_helper` (or override an optional one).
-   Image helpers must finish via `_persist` (honors `output_format`); spectrum
-   and STEM-data helpers via `save_acquisition`. Examples already present:
+   Acquisition helpers save through `save_acquisition`. Examples already present:
    `_acquire_scanned_image`, `_acquire_camera_image`,
    `_acquire_scanned_data_advanced`, `_acquire_spectrum`.
 
