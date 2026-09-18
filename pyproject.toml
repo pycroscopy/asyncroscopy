@@ -22,6 +22,7 @@ dependencies = [
     "ase>=3.27.0",
     "pyTEMlib>=0.2024.1.0",
     "sidpy>=0.12.8",
+    "pyNSID>=0.0.7.2",
     "fastmcp>=0.1.0",
     "anyio>=4.0.0",
     # AutoScript (local wheels)
