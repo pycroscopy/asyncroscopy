@@ -9,6 +9,8 @@ from xml.etree import ElementTree as ET
 
 import h5py
 import numpy as np
+import sidpy
+from pyNSID.io.hdf_io import write_nsid_dataset
 
 DEFAULT_ACQUISITION_DIR = "outputs/tiled_acquisitions"
 
@@ -27,6 +29,7 @@ def save_acquisition(
 ) -> str:
     """Save HDF5 and return its DATA/Tiled key or local path.
 
+    Sidpy inputs use NSID; unmigrated raw inputs retain their existing layout.
     Explicit ``datasets`` supply exact names, sources, and attributes.
     """
     detector_list = list(detectors) if isinstance(detectors, (list, tuple)) else [detectors]
@@ -57,8 +60,12 @@ def save_acquisition(
         for key, value in (file_attrs or {}).items():
             h5.attrs[key] = value if isinstance(value, (str, int, float, bool, np.number)) else json.dumps(value)
 
-        for item in datasets:
+        for index, item in enumerate(datasets):
             source = item.get("source", item.get("data"))
+            if isinstance(source, sidpy.Dataset):
+                channel = h5.create_group(f"Measurement_000/Channel_{index:03d}", track_order=True)
+                write_nsid_dataset(source, channel, main_data_name="data", compression=None)
+                continue
             data = source.data if hasattr(source, "data") and not isinstance(source, np.ndarray) else source
             name = item["name"]
             if "/" in name:
