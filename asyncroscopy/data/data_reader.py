@@ -1,4 +1,5 @@
-"""Inactive MRC conversion reference pending the Tiled/SciFiReaders adapter."""
+"""Austin is working on: Inactive MRC conversion reference pending the Tiled/SciFiReaders adapter.
+worked under the old schema, now outdated. will use as an outline for remote MRC conversion and registration once the new schema is in place."""
 
 # Former DATA method; not runnable without replacing its DATA state and registration.
 # import json
