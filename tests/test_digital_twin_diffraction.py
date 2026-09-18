@@ -142,7 +142,13 @@ def test_particle_camera_acquisition_saves_local_lattice_metadata(monkeypatch, t
     )
 
     with h5py.File(saved_path, 'r') as h5:
-        attrs = h5['image'].attrs
+        channel = h5['Measurement_000/Channel_000/data']
+        attrs = channel['metadata'].attrs
+        np.testing.assert_array_equal(channel['data'][()], np.ones((32, 32), dtype=np.float32))
+        np.testing.assert_allclose(channel['angle_x'][()], (np.arange(32) - 16) * 0.005)
+        np.testing.assert_allclose(channel['angle_y'][()], (np.arange(32) - 16) * 0.005)
+        assert channel['angle_x'].attrs['units'] == 'rad'
+        assert channel['angle_y'].attrs['dimension_type'] == 'RECIPROCAL'
         assert attrs['particle_lattice_parameter_angstrom'] == particle['lattice_parameter']
         assert attrs['particle_center_lattice_parameter_angstrom'] == particle['center_lattice_parameter']
         assert attrs['particle_lattice_strain_fraction'] == particle['lattice_strain_fraction']
@@ -164,13 +170,14 @@ def test_off_particle_camera_acquisition_saves_vacuum_diffraction(tmp_path: Path
 
     assert saved_path.suffix == '.h5'
     with h5py.File(saved_path, 'r') as h5:
-        image = h5['image'][()]
+        channel = h5['Measurement_000/Channel_000/data']
+        image = channel['data'][()]
         assert image.shape == (32, 32)
-        assert h5['image'].attrs['acquisition_type'] == 'diffraction'
-        assert h5['image'].attrs['detector'] == 'BM-Ceta'
-        assert h5['image'].attrs['pixel_size_mrad'] == 5.0
-        assert h5['image'].attrs['max_angle_mrad'] == 80.0
-        assert h5['image'].attrs['rattle_value'] == 0.0
+        assert channel['metadata'].attrs['acquisition_type'] == 'diffraction'
+        assert channel['metadata'].attrs['detector'] == 'BM-Ceta'
+        assert channel['metadata'].attrs['pixel_size_mrad'] == 5.0
+        assert channel['metadata'].attrs['max_angle_mrad'] == 80.0
+        assert channel['metadata'].attrs['rattle_value'] == 0.0
 
 
 def test_particle_atoms_include_rotation_and_rattle(monkeypatch, tmp_path: Path):
@@ -239,8 +246,18 @@ def test_scanned_image_saves_pixel_size_metadata(tmp_path: Path):
     saved_path = Path(twin._acquire_scanned_image(32, 1e-6, ['HAADF']))
 
     with h5py.File(saved_path, 'r') as h5:
-        image = h5['image/HAADF']
+        channel = h5['Measurement_000/Channel_000/data']
+        image = channel['data']
+        attrs = channel['metadata'].attrs
         assert image.shape == (64, 64)
-        assert image.attrs['pixel_size_nm'] == 500.0 / 64
-        assert image.attrs['pixel_size_m'] == FOV_M / 64
-        assert image.attrs['sample_pixel_size_nm'] == 500.0 / 256
+        assert image.dtype == np.float32
+        assert image.attrs['data_type'] == 'IMAGE'
+        assert image.attrs['units'] == 'a.u.'
+        assert attrs['detector'] == 'HAADF'
+        assert attrs['pixel_size_nm'] == 500.0 / 64
+        assert attrs['pixel_size_m'] == FOV_M / 64
+        assert attrs['sample_pixel_size_nm'] == 500.0 / 256
+        np.testing.assert_allclose(np.diff(channel['x'][()]), FOV_M / 64)
+        np.testing.assert_allclose(np.diff(channel['y'][()]), FOV_M / 64)
+        assert channel['x'].attrs['units'] == 'm'
+        assert channel['y'].attrs['dimension_type'] == 'SPATIAL'

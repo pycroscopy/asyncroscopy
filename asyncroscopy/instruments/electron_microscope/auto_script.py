@@ -22,6 +22,7 @@ import time
 from pathlib import Path
 
 import numpy as np
+import sidpy
 import tango
 from tango import AttrWriteType, DevState
 from tango.server import attribute, command, device_property
@@ -265,10 +266,17 @@ class AutoScriptMicroscope(ElectronMicroscope):
         detector_list = [d.upper() for d in detector_list]
         settings = StemAcquisitionSettings(dwell_time=dwell_time, detector_types=detector_list, size=imsize, region=Region(RegionCoordinateSystem.RELATIVE, Rectangle(*scan_region)))
         adorned = self._microscope.acquisition.acquire_stem_images_advanced(settings)
-        if not isinstance(adorned, list):
-            adorned = [adorned]
+        images = []
+        for detector, acquired in zip(detector_list, adorned, strict=True):
+            calibration = acquired.metadata.binary_result
+            image = sidpy.Dataset.from_array(acquired.data, title=detector, datatype="IMAGE", quantity="Intensity", units=calibration.acquisition_unit, modality="STEM", source="AutoScript")
+            image.set_dimension(0, sidpy.Dimension(np.arange(image.shape[0]) * calibration.pixel_size.y, name="y", quantity="Length", units="m", dimension_type="spatial"))
+            image.set_dimension(1, sidpy.Dimension(np.arange(image.shape[1]) * calibration.pixel_size.x, name="x", quantity="Length", units="m", dimension_type="spatial"))
+            image.original_metadata = {"metadata_as_xml": acquired.metadata.metadata_as_xml}
+            image.metadata = {"acquisition_type": "stem_image", "detector": detector, "dwell_time_s": dwell_time, "scan_region": list(scan_region)}
+            images.append(image)
         data_server = self._detector_proxies.get("data")
-        return save_acquisition(self, data_server, "stem_image", detector_list, adorned)
+        return save_acquisition(self, data_server, "stem_image", detector_list, images)
 
 
     def _acquire_camera_image(

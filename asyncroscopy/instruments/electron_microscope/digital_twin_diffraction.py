@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+import sidpy
 import tango
 from ase import Atoms
 from ase.build import bulk
@@ -358,15 +359,12 @@ class DigitalTwinDiffraction(DigitalTwin):
                     'particle_zone_axis': '<100>',
                 }
             )
-        return save_acquisition(
-            self,
-            data_server,
-            'diffraction',
-            str(detector),
-            diffraction,
-            dataset_name='image',
-            dataset_attrs=attrs,
-        )
+        image = sidpy.Dataset.from_array(diffraction, title=str(detector), datatype='IMAGE', quantity='Normalized intensity', units='a.u.', modality='STEM diffraction', source='DigitalTwinDiffraction')
+        angles = (np.arange(image_size) - image_size // 2) * attrs['pixel_size_rad']
+        image.set_dimension(0, sidpy.Dimension(angles, name='angle_y', quantity='Scattering angle', units='rad', dimension_type='reciprocal'))
+        image.set_dimension(1, sidpy.Dimension(angles, name='angle_x', quantity='Scattering angle', units='rad', dimension_type='reciprocal'))
+        image.metadata = {'acquisition_type': 'diffraction', 'detector': str(detector), **attrs}
+        return save_acquisition(self, data_server, 'diffraction', str(detector), image)
 
     def _acquire_scanned_image(
         self,
@@ -386,8 +384,16 @@ class DigitalTwinDiffraction(DigitalTwin):
             'map_size_px': int(self.map_size),
             'sample_pixel_size_nm': float(FOV_NM / int(self.map_size)),
         }
-        images = [self._render_stem_image(image_size, float(dwell_time), [detector]) for detector in detector_list]
-        return save_acquisition(self, data_server, 'stem_image', detector_list, images, dataset_attrs=attrs)
+        images = []
+        coordinates = ((np.arange(image_size) + 0.5) / image_size - 0.5) * FOV_M
+        for detector in detector_list:
+            pixels = self._render_stem_image(image_size, float(dwell_time), [detector])
+            image = sidpy.Dataset.from_array(pixels, title=detector, datatype='IMAGE', quantity='Normalized intensity', units='a.u.', modality='STEM', source='DigitalTwinDiffraction')
+            image.set_dimension(0, sidpy.Dimension(coordinates + self._stage_position[1], name='y', quantity='Length', units='m', dimension_type='spatial'))
+            image.set_dimension(1, sidpy.Dimension(coordinates + self._stage_position[0], name='x', quantity='Length', units='m', dimension_type='spatial'))
+            image.metadata = {'acquisition_type': 'stem_image', 'detector': detector, 'dwell_time_s': float(dwell_time), **attrs}
+            images.append(image)
+        return save_acquisition(self, data_server, 'stem_image', detector_list, images)
 
     def _set_fov(self, fov) -> None:
         self.warn_stream('DigitalTwinDiffraction uses a fixed 500 nm field of view.')

@@ -122,7 +122,13 @@ class TestAutoScriptMicroscope:
 
     def test_scanned_image_helper_uses_relative_region(self, monkeypatch, tmp_path) -> None:
         class FakeImage:
-            data = np.array([[1, 2], [3, 4]], dtype=np.uint16)
+            data = np.array([[1, 2, 3], [4, 5, 6]], dtype=np.uint16)
+            metadata = types.SimpleNamespace(
+                metadata_as_xml="<Metadata><Detector>HAADF</Detector></Metadata>",
+                binary_result=types.SimpleNamespace(
+                    acquisition_unit="counts", pixel_size=types.SimpleNamespace(x=2e-9, y=3e-9),
+                ),
+            )
 
         class FakeAcquisition:
             def __init__(self) -> None:
@@ -150,8 +156,16 @@ class TestAutoScriptMicroscope:
         settings = acquisition.settings
         assert saved_path.endswith(".h5")
         with h5py.File(saved_path, "r") as h5:
-            assert h5["image/HAADF"][()].tolist() == [[1, 2], [3, 4]]
-            assert h5["image/HAADF"].attrs["detector"] == "HAADF"
+            channel = h5["Measurement_000/Channel_000/data"]
+            assert channel["data"].dtype == np.uint16
+            assert channel["data"][()].tolist() == [[1, 2, 3], [4, 5, 6]]
+            assert channel["data"].attrs["data_type"] == "IMAGE"
+            assert channel["data"].attrs["units"] == "counts"
+            np.testing.assert_allclose(channel["x"][()], [0.0, 2e-9, 4e-9])
+            np.testing.assert_allclose(channel["y"][()], [0.0, 3e-9])
+            assert channel["x"].attrs["units"] == "m"
+            assert channel["original_metadata"].attrs["metadata_as_xml"] == FakeImage.metadata.metadata_as_xml
+            assert channel["metadata"].attrs["detector"] == "HAADF"
         assert settings.size == 128
         assert settings.dwell_time == pytest.approx(4e-6)
         assert settings.detector_types == ["HAADF"]
