@@ -201,6 +201,7 @@ class TestAutoScriptMicroscope:
         class FakeImage:
             def __init__(self, value) -> None:
                 self.data = np.full((256, 256), value, dtype=np.int16)
+                self.metadata = types.SimpleNamespace(binary_result=types.SimpleNamespace(acquisition_unit="counts", pixel_size=types.SimpleNamespace(x=2e-9, y=3e-9)), metadata_as_xml="<Metadata />")
 
         class FakeAcquisition:
             def __init__(self, optics) -> None:
@@ -213,7 +214,7 @@ class TestAutoScriptMicroscope:
                 self.settings.append(settings)
                 return FakeImage(len(self.positions))
 
-        optics = types.SimpleNamespace(paused_scan_beam_position=[0.1, 0.2])
+        optics = types.SimpleNamespace(paused_scan_beam_position=[0.1, 0.2], scan_field_of_view=8e-6)
         acquisition = FakeAcquisition(optics)
         data_server = FakeDataServer(tmp_path)
         microscope = AutoScriptMicroscope.__new__(AutoScriptMicroscope)
@@ -234,9 +235,11 @@ class TestAutoScriptMicroscope:
         assert all(settings.exposure_time == pytest.approx(10e-3) for settings in acquisition.settings)
         assert all(settings.fixed_readout_area == "Half" for settings in acquisition.settings)
         with h5py.File(result, "r") as h5:
-            assert h5["stem_data"].shape == (2, 2, 256, 256)
-            assert h5["stem_data"][:, :, 0, 0].tolist() == [[1, 2], [3, 4]]
-            assert h5["stem_data"].attrs["detector"] == "BM-Ceta"
+            assert h5["Measurement_000/Channel_000/data/data"].shape == (2, 2, 256, 256)
+            np.testing.assert_allclose(h5["Measurement_000/Channel_000/data/scan_x"][()], [3e-6, 5e-6])
+            np.testing.assert_allclose(h5["Measurement_000/Channel_000/data/detector_y"][()][:3], [0, 3e-9, 6e-9])
+            assert h5["Measurement_000/Channel_000/data/data"][:, :, 0, 0].tolist() == [[1, 2], [3, 4]]
+            assert h5["Measurement_000/Channel_000/data/data"].parent["metadata"].attrs["detector"] == "BM-Ceta"
 
     def test_camera_settings_propagate_into_acquisition(
         self,
@@ -268,6 +271,7 @@ class TestAutoScriptMicroscope:
     ) -> None:
         class FakeImage:
             data = np.array([[9, 8], [7, 6]], dtype=np.uint16)
+            metadata = types.SimpleNamespace(binary_result=types.SimpleNamespace(acquisition_unit="counts", pixel_size=types.SimpleNamespace(x=2e-9, y=3e-9)), metadata_as_xml="<Metadata />")
 
         class FakeAcquisition:
             def __init__(self) -> None:
@@ -300,9 +304,10 @@ class TestAutoScriptMicroscope:
         assert settings.fixed_readout_area == FixedReadoutArea.HALF
         assert settings.frame_combining == 6
         with h5py.File(result, "r") as h5:
-            assert h5["image"][()].tolist() == [[9, 8], [7, 6]]
-            assert h5["image"].attrs["acquisition_type"] == "camera_image"
-            assert h5["image"].attrs["detector"] == "BM-Ceta"
+            assert h5["Measurement_000/Channel_000/data/data"][()].tolist() == [[9, 8], [7, 6]]
+            np.testing.assert_allclose(h5["Measurement_000/Channel_000/data/x"][()], [0, 2e-9])
+            assert h5["Measurement_000/Channel_000/data/data"].parent["metadata"].attrs["acquisition_type"] == "camera_image"
+            assert h5["Measurement_000/Channel_000/data/data"].parent["metadata"].attrs["detector"] == "BM-Ceta"
 
     def test_camera_device_can_select_flucam(
         self,
@@ -345,6 +350,7 @@ class TestAutoScriptMicroscope:
     def test_spectrum_helper_saves_hdf5_and_registers(self, monkeypatch, tmp_path) -> None:
         class FakeSpectrum:
             data = np.array([1, 2, 3], dtype=np.uint32)
+            metadata = types.SimpleNamespace(binary_result=types.SimpleNamespace(acquisition_unit="counts"), analytical_detectors=[types.SimpleNamespace(offset_energy=-10, dispersion=5)], metadata_as_xml="<Metadata />")
 
         class FakeEds:
             def __init__(self) -> None:
@@ -365,8 +371,9 @@ class TestAutoScriptMicroscope:
 
         assert result.endswith(".h5")
         with h5py.File(result, "r") as h5:
-            assert h5["spectrum"][()].tolist() == [1, 2, 3]
-            assert h5["spectrum"].attrs["acquisition_type"] == "spectrum"
+            assert h5["Measurement_000/Channel_000/data/data"][()].tolist() == [1, 2, 3]
+            np.testing.assert_allclose(h5["Measurement_000/Channel_000/data/energy"][()], [-10, -5, 0])
+            assert h5["Measurement_000/Channel_000/data/data"].parent["metadata"].attrs["acquisition_type"] == "spectrum"
         assert eds.settings.eds_detector == EdsDetectorType.SUPER_X
         assert eds.settings.exposure_time == pytest.approx(0.25)
         assert eds.settings.exposure_time_type == ExposureTimeType.LIVE_TIME

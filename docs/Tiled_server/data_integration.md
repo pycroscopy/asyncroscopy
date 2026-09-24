@@ -4,7 +4,7 @@ Acquisitions save one HDF5 file per event. `save_acquisition` writes arrays and
 metadata attributes, closes the file, then registers it through the DATA Tango
 device.
 
-AutoScript scanned images and diffraction DigitalTwin images supply sidpy
+AutoScript acquisitions and diffraction DigitalTwin images supply sidpy
 datasets, saved as NSID with calibrated axes and acquisition metadata.
 AutoScript also preserves the original vendor XML.
 Other acquisition paths retain their existing HDF5 layouts.

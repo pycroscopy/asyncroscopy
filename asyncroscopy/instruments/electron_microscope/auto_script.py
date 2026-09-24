@@ -287,10 +287,7 @@ class AutoScriptMicroscope(ElectronMicroscope):
         readout_area: str,
         frame_combining: int = 1,
     ) -> str:
-        """
-        Call advanced AutoScript camera acquisition, save the adorned image,
-        and return its DATA/Tiled key.
-        """
+        """Acquire a camera image and return its DATA/Tiled key."""
         camera_detector = {"flucam": "Flucam", "bm-ceta": "BM-Ceta"}.get(detector.lower(), detector)
         fixed_readout_area = {
             "full": "Full",
@@ -304,15 +301,15 @@ class AutoScriptMicroscope(ElectronMicroscope):
             fixed_readout_area=fixed_readout_area,
             frame_combining=frame_combining,
         )
-        adorned = self._microscope.acquisition.acquire_camera_image_advanced(settings)
+        acquired = self._microscope.acquisition.acquire_camera_image_advanced(settings)
+        calibration = acquired.metadata.binary_result
+        image = sidpy.Dataset.from_array(acquired.data, title=detector, datatype="IMAGE", quantity="Intensity", units=calibration.acquisition_unit, modality="TEM", source="AutoScript")
+        image.set_dimension(0, sidpy.Dimension(np.arange(image.shape[0]) * calibration.pixel_size.y, name="y", quantity="Length", units="m", dimension_type="spatial"))
+        image.set_dimension(1, sidpy.Dimension(np.arange(image.shape[1]) * calibration.pixel_size.x, name="x", quantity="Length", units="m", dimension_type="spatial"))
+        image.original_metadata = {"metadata_as_xml": acquired.metadata.metadata_as_xml}
+        image.metadata = {"acquisition_type": "camera_image", "detector": detector, "exposure_time_s": exposure_time, "readout_area": readout_area, "frame_combining": frame_combining}
         data_server = self._detector_proxies.get("data")
-        return save_acquisition(
-            self,
-            data_server,
-            "camera_image",
-            str(detector),
-            adorned,
-        )
+        return save_acquisition(self, data_server, "camera_image", detector, image)
 
 
     # the following file is COMPLETELY CORRECT, except the AutoScript acquire_stem_data_advanced is currently trash.
@@ -368,10 +365,18 @@ class AutoScriptMicroscope(ElectronMicroscope):
         finally:
             self._microscope.optics.paused_scan_beam_position = starting_beam_position
 
-        stem_data = np.stack(frames).reshape(scan_size, scan_size, 256, 256)
-        attrs = {"scan_shape": [scan_size, scan_size], "diffraction_shape": [256, 256], "dwell_time": float(dwell_time), "scan_region": [left, top, width, height], "readout_area": "Half"}
+        calibration = image.metadata.binary_result
+        stem_data = sidpy.Dataset.from_array(np.stack(frames).reshape(scan_size, scan_size, 256, 256), title=camera_detector, datatype="IMAGE_4D", quantity="Intensity", units=calibration.acquisition_unit, modality="4D-STEM", source="AutoScript")
+        field_of_view = self._microscope.optics.scan_field_of_view
+        stem_data.set_dimension(0, sidpy.Dimension(y_positions * field_of_view, name="scan_y", quantity="Length", units="m", dimension_type="spatial"))
+        stem_data.set_dimension(1, sidpy.Dimension(x_positions * field_of_view, name="scan_x", quantity="Length", units="m", dimension_type="spatial"))
+        stem_data.set_dimension(2, sidpy.Dimension(np.arange(256) * calibration.pixel_size.y, name="detector_y", quantity="Length", units="m", dimension_type="spatial"))
+        stem_data.set_dimension(3, sidpy.Dimension(np.arange(256) * calibration.pixel_size.x, name="detector_x", quantity="Length", units="m", dimension_type="spatial"))
+        # Camera calibration and XML describe the final frame; acquisition settings are shared.
+        stem_data.original_metadata = {"metadata_as_xml": image.metadata.metadata_as_xml}
+        stem_data.metadata = {"acquisition_type": "stem_data", "detector": camera_detector, "scan_shape": [scan_size, scan_size], "diffraction_shape": [256, 256], "dwell_time": dwell_time, "scan_region": [left, top, width, height], "readout_area": "Half"}
         data_server = self._detector_proxies.get("data")
-        return save_acquisition(self, data_server, "stem_data", camera_detector, stem_data, dataset_name="stem_data", dataset_attrs=attrs)
+        return save_acquisition(self, data_server, "stem_data", camera_detector, stem_data)
 
 
     def _acquire_spectrum(self, detector_name: str, exposure_time: float) -> str:
@@ -381,9 +386,14 @@ class AutoScriptMicroscope(ElectronMicroscope):
         settings.shaping_time = 3e-6
         settings.exposure_time = exposure_time
         settings.exposure_time_type = ExposureTimeType.LIVE_TIME
-        spectrum = self._microscope.analysis.eds.acquire_spectrum(settings)
+        acquired = self._microscope.analysis.eds.acquire_spectrum(settings)
+        calibration = acquired.metadata.analytical_detectors[0]
+        spectrum = sidpy.Dataset.from_array(acquired.data, title=detector_name, datatype="SPECTRUM", quantity="Intensity", units=acquired.metadata.binary_result.acquisition_unit, modality="EDS", source="AutoScript")
+        spectrum.set_dimension(0, sidpy.Dimension(calibration.offset_energy + np.arange(spectrum.shape[0]) * calibration.dispersion, name="energy", quantity="Energy", units="eV", dimension_type="spectral"))
+        spectrum.original_metadata = {"metadata_as_xml": acquired.metadata.metadata_as_xml}
+        spectrum.metadata = {"acquisition_type": "spectrum", "detector": detector_name, "exposure_time_s": exposure_time}
         data_server = self._detector_proxies.get("data")
-        return save_acquisition(self, data_server, "spectrum", detector_name, spectrum, dataset_name="spectrum")
+        return save_acquisition(self, data_server, "spectrum", detector_name, spectrum)
 
     def _place_beam(self, position) -> None:
         """
