@@ -97,3 +97,6 @@ torchvision = [
 name = "pytorch-cu130"
 url = "https://download.pytorch.org/whl/cu130"
 explicit = true
+
+[tool.setuptools.package-data]
+asyncroscopy = ["data/config.yml"]

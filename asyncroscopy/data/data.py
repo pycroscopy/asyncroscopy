@@ -159,12 +159,12 @@ class DATA(Device):
             return self.get_config()
 
         command = [
-            sys.executable, "-m", "tiled", "serve", "catalog", catalog_database,
-            "--read", self._save_path, "--write", self._save_path,
+            sys.executable, "-m", "tiled", "serve", "config", str(Path(__file__).with_name("config.yml")),
             "--public", "--api-key", self._api_key,
             "--host", self._host, "--port", str(self._port),
         ]
-        self._tiled_process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT, text=True)
+        environment = {**os.environ, "ASYNCROSCOPY_TILED_CATALOG": catalog_database, "ASYNCROSCOPY_ACQUISITION_DIR": self._save_path}
+        self._tiled_process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT, text=True, env=environment)
         self._tiled_serve_path = self._save_path
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline and not self._tiled_server_is_reachable():
@@ -194,7 +194,7 @@ class DATA(Device):
         async def register_file_and_wait_for_key() -> None:
             client = from_uri(self._tiled_uri(), api_key=self._api_key)
             # Acquisition files are already closed; expose this file before returning.
-            await register(client, path, walkers=[ONE_NODE_PER_FILE_WALKER], key_from_filename=identity)
+            await register(client, path, adapters_by_mimetype={"application/x-hdf5": "asyncroscopy.data.data_reader:NSIDAdapter"}, walkers=[ONE_NODE_PER_FILE_WALKER], key_from_filename=identity)
             if not hasattr(client, "__getitem__"):
                 return
             deadline = time.monotonic() + REGISTER_TIMEOUT_SECONDS
@@ -230,7 +230,7 @@ class DATA(Device):
         try:
             client = from_uri(self._tiled_uri(), api_key=self._api_key)
             asyncio.run(asyncio.wait_for(
-                register(client, save_path, walkers=[ONE_NODE_PER_FILE_WALKER], key_from_filename=identity),
+                register(client, save_path, adapters_by_mimetype={"application/x-hdf5": "asyncroscopy.data.data_reader:NSIDAdapter"}, walkers=[ONE_NODE_PER_FILE_WALKER], key_from_filename=identity),
                 REGISTER_SAVE_PATH_TIMEOUT_SECONDS,
             ))
         except Exception as exc:

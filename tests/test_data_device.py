@@ -1,5 +1,4 @@
 import json
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -33,7 +32,7 @@ class TestDataDevice:
 
         assert save_path.is_dir()
 
-    def test_start_tiled_server_uses_catalog_server_command(
+    def test_start_tiled_server_uses_configured_nsid_adapter(
         self,
         data_proxy: tango.DeviceProxy,
         monkeypatch,
@@ -85,42 +84,14 @@ class TestDataDevice:
 
         assert returned["tiled_server"] == "yes"
         command_prefix = ["python", "-m"]
-        key_value = popen_calls[0]["command"][12]
-        expected_command = [
-            *command_prefix,
-            "tiled",
-            "serve",
-            "catalog",
-            str(tmp_path / ".asyncroscopy_tiled_catalog.db"),
-            "--read",
-            str(tmp_path),
-            "--write",
-            str(tmp_path),
-            "--public",
-            "--api-key",
-            key_value,
-            "--host",
-            "127.0.0.1",
-            "--port",
-            "9091",
-        ]
-
-        assert len(popen_calls) == 1
-        actual_command = popen_calls[0]["command"]
-
         expected_catalog = str(tmp_path / ".asyncroscopy_tiled_catalog.db")
-
-        assert actual_command[:5] == expected_command[:5]
-        assert actual_command[5] == expected_catalog
-        assert actual_command[6] == expected_command[6]
-        assert Path(actual_command[7]) == Path(expected_command[7])
-        assert actual_command[8:] == expected_command[8:]
-
-        assert popen_calls[0]["kwargs"] == {
-            "stdout": subprocess.DEVNULL,
-            "stderr": subprocess.STDOUT,
-            "text": True,
-        }
+        expected_config = Path(__file__).parents[1] / "asyncroscopy" / "data" / "config.yml"
+        actual_command = popen_calls[0]["command"]
+        assert actual_command[:6] == ["python", "-m", "tiled", "serve", "config", str(expected_config)]
+        assert actual_command[6:8] == ["--public", "--api-key"]
+        assert actual_command[9:] == ["--host", "127.0.0.1", "--port", "9091"]
+        assert popen_calls[0]["kwargs"]["env"]["ASYNCROSCOPY_TILED_CATALOG"] == expected_catalog
+        assert popen_calls[0]["kwargs"]["env"]["ASYNCROSCOPY_ACQUISITION_DIR"] == str(tmp_path)
 
         assert len(run_commands) == 1
         assert run_commands[0][:6] == [
