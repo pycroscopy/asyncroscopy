@@ -23,7 +23,9 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from asyncroscopy.mcp.mcp_server import MCPServer
+from fastmcp.tools import ToolResult
+
+from asyncroscopy.mcp.mcp_server import COMMAND_TIMEOUT_MILLIS, MCPServer
 
 
 def mcp_kwargs(**overrides):
@@ -542,3 +544,126 @@ class TestMCPRegistration:
         server.setup(print_summary=False)
 
         assert set(calls) == {"get_data_from_key", "list_devices"}
+
+
+class TestMCPCommandTimeout:
+    def test_find_tools_raises_proxy_timeout_above_tango_default(self, monkeypatch) -> None:
+        class FakeDb:
+            def get_device_exported(self, pattern):
+                return type("Result", (), {"value_string": ["asyncroscopy/twin/default"]})()
+
+        timeouts = []
+
+        class FakeProxy:
+            def __init__(self, name):
+                self.name = name
+
+            def set_timeout_millis(self, millis):
+                timeouts.append(millis)
+
+            def info(self):
+                return type("Info", (), {"dev_class": "Twin"})()
+
+            def command_list_query(self):
+                return []
+
+        monkeypatch.setattr("asyncroscopy.mcp.mcp_server.Database", lambda host, port: FakeDb())
+        monkeypatch.setattr("asyncroscopy.mcp.mcp_server.DeviceProxy", FakeProxy)
+
+        server = MCPServer("test", "localhost", 1234, **mcp_kwargs(), verbose=False)
+        server._find_tools()
+
+        assert timeouts == [COMMAND_TIMEOUT_MILLIS]
+        assert COMMAND_TIMEOUT_MILLIS > 3000
+
+
+class TestMCPSpectrumPreview:
+    png_magic = b"\x89PNG\r\n\x1a\n"
+
+    def test_spectrum_png_labeled_and_unlabeled(self) -> None:
+        labeled = MCPServer._spectrum_to_png_bytes(
+            np.array([0.5, 0.3, 0.2]), ["Au", "Pt", "Fe"]
+        )
+        unlabeled = MCPServer._spectrum_to_png_bytes(np.arange(64, dtype=np.float64))
+
+        assert labeled[: len(self.png_magic)] == self.png_magic
+        assert unlabeled[: len(self.png_magic)] == self.png_magic
+
+    def test_element_labels_parse_json_and_reject_malformed(self) -> None:
+        assert MCPServer._element_labels({"elements": '["Au", "Pt"]'}) == ["Au", "Pt"]
+        assert MCPServer._element_labels({"elements": ["Fe"]}) == ["Fe"]
+        assert MCPServer._element_labels({"elements": "not json"}) is None
+        assert MCPServer._element_labels({"elements": [1, 2]}) is None
+        assert MCPServer._element_labels({}) is None
+
+    def test_acquire_spectrum_result_gains_png_preview(self, monkeypatch) -> None:
+        monkeypatch.setattr("asyncroscopy.mcp.mcp_server.Database", lambda host, port: None)
+
+        class FakeSpectrum:
+            metadata = {"elements": json.dumps(["Au", "Pt", "Fe"])}
+
+            def read(self):
+                return np.array([0.5, 0.3, 0.2])
+
+        class FakeContainer(dict):
+            metadata: dict = {}
+
+        node = FakeContainer(spectrum=FakeSpectrum())
+
+        class FakeDataProxy:
+            def get_config(self):
+                return json.dumps({"uri": "http://microscope:9091"})
+
+        monkeypatch.setattr(
+            "asyncroscopy.mcp.mcp_server.DeviceProxy", lambda address: FakeDataProxy()
+        )
+        monkeypatch.setattr(
+            "asyncroscopy.mcp.mcp_server.from_uri", lambda uri: {"spectrum_eds.h5": node}
+        )
+
+        server = MCPServer("test", "localhost", 1234, **mcp_kwargs(), verbose=False)
+        result = server._augment_with_preview("acquire_spectrum", "spectrum_eds.h5")
+
+        assert isinstance(result, ToolResult)
+        assert result.structured_content == {"result": "spectrum_eds.h5"}
+        image_blocks = [
+            block for block in result.content if getattr(block, "type", "") == "image"
+        ]
+        assert len(image_blocks) == 1
+        assert base64.b64decode(image_blocks[0].data)[: len(self.png_magic)] == self.png_magic
+
+    def test_spectrum_preview_failure_names_the_reason(self, monkeypatch) -> None:
+        monkeypatch.setattr("asyncroscopy.mcp.mcp_server.Database", lambda host, port: None)
+
+        class FakeContainer(dict):
+            metadata: dict = {}
+
+        class FakeDataProxy:
+            def get_config(self):
+                return json.dumps({"uri": "http://microscope:9091"})
+
+        monkeypatch.setattr(
+            "asyncroscopy.mcp.mcp_server.DeviceProxy", lambda address: FakeDataProxy()
+        )
+        monkeypatch.setattr(
+            "asyncroscopy.mcp.mcp_server.from_uri",
+            lambda uri: {"spectrum_eds.h5": FakeContainer()},
+        )
+
+        server = MCPServer("test", "localhost", 1234, **mcp_kwargs(), verbose=False)
+        result = server._augment_with_preview("acquire_spectrum", "spectrum_eds.h5")
+
+        assert isinstance(result, ToolResult)
+        assert result.structured_content == {"result": "spectrum_eds.h5"}
+        texts = [getattr(block, "text", "") for block in result.content]
+        assert any("image preview unavailable" in text for text in texts)
+        assert any("no 1D dataset" in text for text in texts)
+
+    def test_unrelated_commands_keep_plain_results(self, monkeypatch) -> None:
+        monkeypatch.setattr("asyncroscopy.mcp.mcp_server.Database", lambda host, port: None)
+
+        server = MCPServer("test", "localhost", 1234, **mcp_kwargs(), verbose=False)
+
+        assert server._augment_with_preview("get_stage", "[0.0,0.0]") == "[0.0,0.0]"
+        assert server._augment_with_preview("acquire_spectrum", "") == ""
+        assert server._augment_with_preview("acquire_spectrum", 42) == 42

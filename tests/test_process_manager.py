@@ -133,6 +133,9 @@ def test_cleanup_stale_state_on_enter(tmp_path, monkeypatch):
         killed_pids.append((pid, sig))
 
     monkeypatch.setattr(process_manager.os, "kill", mock_kill)
+    if os.name != "nt":
+        monkeypatch.setattr(process_manager.os, "getpgid", lambda pid: pid)
+        monkeypatch.setattr(process_manager.os, "killpg", mock_kill)
 
     time_vals = [100.0, 102.0, 100.0, 102.0]
     monkeypatch.setattr(process_manager.time, "time", lambda: time_vals.pop(0) if time_vals else 200.0)
@@ -205,6 +208,8 @@ def test_stop_processes_on_port(tmp_path, monkeypatch):
 
         monkeypatch.setattr(subprocess, "run", lambda cmd, **kwargs: FakeCompletedProcess())
         monkeypatch.setattr(os, "kill", mock_kill)
+        monkeypatch.setattr(os, "getpgid", lambda pid: pid)
+        monkeypatch.setattr(os, "killpg", mock_kill)
 
         count = manager.stop_processes_on_port(9094)
         assert count == 2

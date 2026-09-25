@@ -25,6 +25,28 @@ Start the MCP server in a second terminal for agent/AI integration:
 uv run startup_scripts/run_mcp.py --yaml configs/mcp.yaml
 ```
 
+Start only the segmentation Tango device against an existing Tango/DATA/Tiled stack:
+```bash
+uv run --extra segment startup_scripts/run_segmentation.py --yaml configs/Segmentation.yaml
+```
+
+Start the oriented-particle digital twin:
+
+```bash
+uv run --extra diffraction python startup_scripts/run_servers.py --yaml configs/digital_twin_particles.yaml
+```
+
+`configs/Segmentation.yaml` sets `compute_device: cuda`. On Linux and Windows,
+the `segment` extra installs PyTorch from its CUDA 13.0 package index; macOS
+continues to use the normal PyPI build. The launcher fails at startup instead
+of silently using the CPU when CUDA is unavailable. Install and verify on the
+GPU host before launching:
+
+```bash
+uv sync --extra segment --reinstall-package torch --reinstall-package torchvision
+uv run --extra segment python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available(), torch.cuda.get_device_name() if torch.cuda.is_available() else '')"
+```
+
 For interactive GUI-based startup:
 ```bash
 uv run startup_guis/server_gui.py

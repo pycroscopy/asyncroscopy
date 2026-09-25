@@ -107,9 +107,12 @@ class ProcessManager:
             stderr_lines=deque(maxlen=self.max_output_lines),
         )
         self.active_processes.append(managed)
-        self.history.append(managed) 
+        self.history.append(managed)
         self._drain(proc.stdout, managed.stdout_lines)
         self._drain(proc.stderr, managed.stderr_lines)
+        # Persisted immediately, not just on stop: if this process dies
+        # ungracefully (crash, force-kill), the next launch's
+        # _cleanup_stale_state() needs its PID on disk to find and reap it.
         self.save()
         return managed
 
@@ -280,7 +283,15 @@ class ProcessManager:
             self._remove_state_file()
 
     def _kill_stale_pid(self, pid: int):
-        """Best-effort termination of orphan process IDs from a previous crash."""
+        """Best-effort termination of orphan process IDs from a previous crash.
+
+        Recorded PIDs are process-group leaders (start_process uses
+        start_new_session=True), so signaling the whole group is required:
+        a bare os.kill only reaches a wrapper like `uv run`, and once that
+        wrapper is SIGKILLed it has no chance to relay the signal to the
+        actual device-server child it spawned, leaving that child running
+        and still holding its Tango server-instance name.
+        """
         if os.name == "nt":
             subprocess.run(
                 ["taskkill", "/F", "/T", "/PID", str(pid)],
@@ -288,8 +299,13 @@ class ProcessManager:
             )
         else:
             try:
-                os.kill(pid, signal.SIGTERM)
+                pgid = os.getpgid(pid)
             except ProcessLookupError:
+                return
+
+            try:
+                os.killpg(pgid, signal.SIGTERM)
+            except (ProcessLookupError, PermissionError):
                 return
 
             # Brief poll to see if SIGTERM was honored
@@ -302,8 +318,8 @@ class ProcessManager:
                     return
 
             try:
-                os.kill(pid, signal.SIGKILL)
-            except ProcessLookupError:
+                os.killpg(pgid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
                 pass
 
     def _remove_state_file(self):
@@ -325,11 +341,29 @@ class ProcessManager:
                     print(f"Failed to delete {filename}: {e}")
 
     def scour_ports(self, ports: list[int]):
-        """Finds and kills any process squatting on critical ports."""
+        """Finds and kills any process squatting on critical ports or stale device server processes."""
         for port in ports:
             count = self.stop_processes_on_port(port)
             if count > 0:
                 print(f"Cleared {count} stale process(es) on port {port}")
+        self.stop_stale_device_servers()
+
+    def stop_stale_device_servers(self):
+        """Finds and kills orphaned Python processes running asyncroscopy device servers."""
+        current_pid = os.getpid()
+        if os.name == "nt":
+            try:
+                cmd = ["wmic", "process", "where", "name='python.exe'", "get", "ProcessId,CommandLine"]
+                res = subprocess.run(cmd, capture_output=True, text=True)
+                for line in res.stdout.splitlines():
+                    if ("asyncroscopy.instruments" in line or "asyncroscopy.data" in line) and "run_servers.py" not in line:
+                        parts = line.strip().split()
+                        if parts and parts[-1].isdigit():
+                            pid = int(parts[-1])
+                            if pid != current_pid:
+                                subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True)
+            except Exception:
+                pass
 
     def stop_processes_on_port(self, port: int) -> int:
         """Identifies and kills processes occupying a specific TCP port."""

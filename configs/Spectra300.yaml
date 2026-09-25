@@ -16,7 +16,9 @@ devices:
       hardware_host: 10.46.217.241
       hardware_port: 9095
   camera:    { module_name: asyncroscopy.instruments.electron_microscope.detectors.camera }
-  corrector: { module_name: asyncroscopy.instruments.electron_microscope.hardware.corrector }
+  corrector:
+    class_name: CEOSCorrector
+    module_name: asyncroscopy.instruments.electron_microscope.hardware.corrector_ceos
   data:      { module_name: asyncroscopy.data.data }
   eds:       { module_name: asyncroscopy.instruments.electron_microscope.detectors.eds }
   scan:      { module_name: asyncroscopy.instruments.electron_microscope.hardware.scan }

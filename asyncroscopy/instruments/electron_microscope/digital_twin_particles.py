@@ -1,23 +1,24 @@
 """
-Digital twin version of AutoScriptMicroscope for HAADF-EDX.
+Particle digital twin for HAADF-EDX.
 
 Useful for testing and development without requiring AutoScript hardware.
 """
 
-
-import json
+from __future__ import annotations
 
 import numpy as np
-import pyTEMlib.probe_tools as pt
 import pyTEMlib.image_tools as it
+import pyTEMlib.probe_tools as pt
 
 import tango
 from tango import AttrWriteType, DevState
-from tango.server import Device, attribute
+from tango.server import attribute, device_property
 
-from asyncroscopy.instruments.electron_microscope.electron_microscope import ElectronMicroscope
+from asyncroscopy.data.data_writer import save_acquisition
+from asyncroscopy.instruments.electron_microscope.digital_twin import DigitalTwin
 
-class DigitalTwinBeta(ElectronMicroscope):
+
+class DigitalTwinParticles(DigitalTwin):
     """
     Detector-specific settings (dwell time, resolution) are stored in
     dedicated detector devices and read via DeviceProxy at acquisition time.
@@ -26,14 +27,18 @@ class DigitalTwinBeta(ElectronMicroscope):
     # ------------------------------------------------------------------
     # Device properties — configure in Tango DB per deployment
     # ------------------------------------------------------------------
-
+    world_imsize = device_property(
+        dtype=int,
+        default_value=128,
+        doc="Number of voxels along each lateral axis of the persistent particle world.",
+    )
 
     # ------------------------------------------------------------------
     # Attributes
     # ------------------------------------------------------------------
     # not finishded
     manufacturer = attribute(
-        label="DigitalTwinBeta",
+        label="DigitalTwinParticles",
         dtype=str,
         doc="Simulation backend",
     )
@@ -54,42 +59,31 @@ class DigitalTwinBeta(ElectronMicroscope):
     # ------------------------------------------------------------------
 
     def init_device(self) -> None:
-        Device.init_device(self)
-        self.set_state(DevState.INIT)
-        
-        # Internal state
-        self._stem_mode = True
-        self._detector_proxies = {}
-        self._manufacturer = "UTKTeam"
-        self._beam_pos_x = 0.5
-        self._beam_pos_y = 0.5
-        self._defocus = 0.0
+        """Initialize the current digital-twin contract and particle world."""
+        super().init_device()
+        self._manufacturer = "UTKTeam Particle Digital Twin"
         self._particle_records = []
-        self._imsize = 512
-        self._fov = 200e-10  # meters, i.e. 200 angstroms
-        self._stage_position = np.random.rand(3) * 1e-6  # random initial stage position in meters
-        
-        self._connect()
-        
+
     def _connect(self):
-        """Simulate connection by connecting to detector proxies."""
+        """Connect the current support devices and build the persistent world."""
         self._connect_detector_proxies()
+        np.random.seed(int(self.sample_seed))
+        self._make_sample_recipe()
+        self._cook_sample_recipe()
         self.set_state(DevState.ON)
 
 
     def _connect_detector_proxies(self) -> None:
         """Build DeviceProxy objects for each configured detector device."""
-        # Extend this dict as more detectors are added
-        # later, we want to do this automatically, not with a dictionary.
         addresses: dict[str, str] = {
-            "AdvancedAcquistion": self.advanced_acquisition_device_address,
             "eds":  self.eds_device_address,
             "stage": self.stage_device_address,
             "scan": self.scan_device_address,
+            "corrector": self.corrector_device_address,
+            "data": self.data_device_address,
         }
-        print(addresses)
         for name, address in addresses.items():
-            if not address:   # <-- minimal fix
+            if not address:
                 self.info_stream(f"Skipping {name}: no address configured")
                 continue
             try:
@@ -138,11 +132,13 @@ class DigitalTwinBeta(ElectronMicroscope):
         dwell_time: float,
         detector_list: list[str] = ["haadf"],
         scan_region: list[float] = [0.0, 0.0, 1.0, 1.0],
-    ) -> np.ndarray:
+        output_format: str = ".h5",
+    ) -> str:
         """
         Acquire a simulated STEM image using the pre-cooked sample state.
         Requires _cook_sample_recipe() to have been called immediately before this.
         """
+        self._cook_sample_recipe()
         size = imsize
         self._imsize = imsize
         fov      = self._fov * 1e10          # Å
@@ -301,7 +297,24 @@ class DigitalTwinBeta(ElectronMicroscope):
         blur_noise  = lowfreq_noise(noisy_image, noise_level=0.1, freq_scale=0.1)
         noisy_image += blur_noise * blur_noise_level
 
-        return np.array(noisy_image, dtype=np.float32)
+        image = np.array(noisy_image, dtype=np.float32)
+        detectors = [detector.upper() for detector in detector_list]
+        images = [image.copy() for _detector in detectors]
+        return save_acquisition(
+            self,
+            self._detector_proxies.get("data"),
+            "stem_image",
+            detectors,
+            images,
+            dataset_attrs={
+                "sample_type": "oriented_particles",
+                "particle_count": len(self._particle_lookup),
+                "world_shape": list(self._world_shape),
+                "voxel_size_angstrom": float(self._vox_size),
+                "stage_position": list(self._get_stage()),
+            },
+            output_format=output_format,
+        )
 
     def _make_sample_recipe(self):
         """
@@ -317,9 +330,9 @@ class DigitalTwinBeta(ElectronMicroscope):
         # ── World geometry ──────────────────────────────────────────────────────────
         fov_ang     = self._fov * 1e10          # Angstroms, lateral
         world_z_ang = fov_ang * 0.5             # thin slab, same as _acquire_scanned_image
-        vox_size    = fov_ang / self._imsize    # Angstroms per voxel (isotropic)
+        nx = ny = max(16, int(self.world_imsize))
+        vox_size    = fov_ang / nx              # Angstroms per voxel (isotropic)
 
-        nx = ny = self._imsize
         nz = max(1, int(round(world_z_ang / vox_size)))
 
         # ── Particle parameters (mirror _acquire_scanned_image) ────────────────────────
@@ -327,7 +340,7 @@ class DigitalTwinBeta(ElectronMicroscope):
         radius_std       = 2.0
         aspect_ratio     = 0.4
         min_separation   = 3.0
-        n_particles      = 40
+        n_particles      = max(1, int(self.sample_particle_count))
         max_attempts     = 500
         desired_angles   = [(0, 0, 0), (60, 0, 0), (45, 45, 45)]
 
@@ -362,7 +375,7 @@ class DigitalTwinBeta(ElectronMicroscope):
 
             radius = np.clip(np.random.normal(particle_radius, radius_std), 3.0, None)
             margin = radius + 2.0
-            sample_fov = (fov_ang * 1.5, fov_ang * 1.5, world_z_ang)
+            sample_fov = (fov_ang, fov_ang, world_z_ang)
 
             cx = np.random.uniform(margin, sample_fov[0] - margin)
             cy = np.random.uniform(margin, sample_fov[1] - margin)
@@ -459,7 +472,7 @@ class DigitalTwinBeta(ElectronMicroscope):
             all_symbols.extend(symbols)
 
         all_positions = np.vstack(all_positions)
-        cell = [fov_ang * 1.5, fov_ang * 1.5, world_z_ang]
+        cell = [fov_ang, fov_ang, world_z_ang]
         atoms_object = Atoms(
             symbols=all_symbols,
             positions=all_positions,
@@ -504,6 +517,9 @@ class DigitalTwinBeta(ElectronMicroscope):
         stage    = self._detector_proxies.get("stage")
         x_m, y_m, z_m  = stage.x, stage.y, stage.z      # metres
         alpha_deg, beta_deg = stage.alpha, stage.beta     # degrees
+        self._stage_position = np.asarray(
+            [x_m, y_m, z_m, alpha_deg, beta_deg], dtype=np.float64
+        )
 
         # Convert translation to Angstroms
         x_ang = x_m * 1e10
@@ -612,7 +628,7 @@ class DigitalTwinBeta(ElectronMicroscope):
             'projected_thickness': projected_thickness_ang,  # (nx, ny) – Å of material
         }
 
-    def _acquire_spectrum(self, detector_name: str, exposure_time: float):
+    def _acquire_spectrum(self, detector_name: str, exposure_time: float) -> str:
         px, py = self.read_beam_pos()   # fractional [0, 1]
         px_pix = px * self._imsize
         py_pix = py * self._imsize
@@ -623,10 +639,30 @@ class DigitalTwinBeta(ElectronMicroscope):
             if (px_pix - cx)**2 + (py_pix - cy)**2 <= r**2:
                 raw   = {el: frac for el, frac in rec['composition'].items()}
                 total = sum(raw.values())
-                return json.dumps({el: v / total + np.random.normal(0.01, 0.1) for el, v in raw.items()})
+                spectrum = {
+                    el: max(0.0, v / total + np.random.normal(0.01, 0.1))
+                    for el, v in raw.items()
+                }
+                break
+        else:
+            all_elements = {
+                el for rec in self._particle_records for el in rec['composition']
+            }
+            spectrum = {
+                el: float(np.abs(np.random.normal(0, 0.05)))
+                for el in all_elements
+            }
 
-        all_elements = {el for rec in self._particle_records for el in rec['composition']}
-        return json.dumps({el: np.abs(np.random.normal(0, 0.05)) for el in all_elements})
+        elements = sorted(spectrum)
+        return save_acquisition(
+            self,
+            self._detector_proxies.get("data"),
+            "spectrum",
+            detector_name,
+            np.asarray([spectrum[element] for element in elements], dtype=np.float64),
+            dataset_name="spectrum",
+            dataset_attrs={"elements": elements, "exposure_time": float(exposure_time)},
+        )
 
 
     def _place_beam(self, position) -> None:
@@ -639,8 +675,13 @@ class DigitalTwinBeta(ElectronMicroscope):
 
     def _set_fov(self, fov) -> None:
         """set field of view in meters"""
-        # For the digital twin, we can just store this as a property and use it in acquisition simulations.
-        self._fov = fov
+        self._fov = float(fov)
+        np.random.seed(int(self.sample_seed))
+        self._make_sample_recipe()
+        self._cook_sample_recipe()
+
+    def _get_fov(self) -> float:
+        return float(self._fov)
 
     def _set_defocus(self, defocus) -> None:
         """Set defocus in meters."""
@@ -657,16 +698,12 @@ class DigitalTwinBeta(ElectronMicroscope):
     
     def _move_stage(self, position):
         """Move stage to [x, y, z, alpha, beta], with x/y/z in meters and tilts in degrees."""
-        self.old_pos = self._stage_position
-
-        # shift the particle records/ atoms object positions by this much, negative
-
-        random_shift = np.random.normal(0, 5e-8, size=5) 
-        self._stage_position = position + random_shift
+        super()._move_stage(position)
+        self._cook_sample_recipe()
 
 # ----------------------------------------------------------------------
 # Server entry point
 # ---------------------------------------------------------------------
 
 if __name__ == "__main__":
-    DigitalTwinBeta.run_server()
+    DigitalTwinParticles.run_server()

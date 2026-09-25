@@ -599,7 +599,6 @@ class DigitalTwinTilt(DigitalTwin):
         detector: str,
         readout_area: str,
         frame_combining: int = 1,
-        electron_counting: bool = True,
         output_format: str = ".h5",
     ) -> str:
         self._sync_stage_from_proxy()
@@ -635,7 +634,6 @@ class DigitalTwinTilt(DigitalTwin):
             "exposure_time": float(exposure_time),
             "readout_area": str(readout_area),
             "frame_combining": int(frame_combining),
-            "electron_counting": bool(electron_counting),
             "simulation": "ASE silicon + abTEM multislice",
             "electron_energy_ev": float(self.electron_energy_ev),
             "potential_sampling_angstrom": float(self.potential_sampling_angstrom),

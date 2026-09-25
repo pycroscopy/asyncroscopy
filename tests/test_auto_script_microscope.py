@@ -1,3 +1,4 @@
+import json
 import types
 from pathlib import Path
 
@@ -18,11 +19,16 @@ from asyncroscopy.instruments.electron_microscope.auto_script import AutoScriptM
 
 class FakeDataServer:
     def __init__(self, save_path=None) -> None:
+        self.copy_requests = []
         if save_path is not None:
             self.save_path = str(save_path)
 
     def register_path(self, path: str) -> str:
         return path
+
+    def copy_and_register_remote_file(self, request_json: str) -> str:
+        self.copy_requests.append(json.loads(request_json))
+        return "registered-stem-data.h5"
 
 
 class TestAutoScriptMicroscope:
@@ -184,48 +190,46 @@ class TestAutoScriptMicroscope:
             }
         ]
 
-    def test_scanned_data_advanced_helper_saves_and_registers_ceta_with_relative_region(self, monkeypatch, tmp_path) -> None:
+    def test_scanned_data_advanced_places_probe_and_saves_camera_frames(self, tmp_path) -> None:
         class FakeImage:
-            data = np.array([[5, 6], [7, 8]], dtype=np.uint16)
+            def __init__(self, value) -> None:
+                self.data = np.full((256, 256), value, dtype=np.int16)
 
         class FakeAcquisition:
-            def __init__(self) -> None:
-                self.settings = None
+            def __init__(self, optics) -> None:
+                self.optics = optics
+                self.positions = []
+                self.settings = []
 
-            def acquire_stem_data_advanced(self, settings):
-                self.settings = settings
-                return FakeImage()
+            def acquire_camera_image_advanced(self, settings):
+                self.positions.append(list(self.optics.paused_scan_beam_position))
+                self.settings.append(settings)
+                return FakeImage(len(self.positions))
 
-        acquisition = FakeAcquisition()
+        optics = types.SimpleNamespace(paused_scan_beam_position=[0.1, 0.2])
+        acquisition = FakeAcquisition(optics)
+        data_server = FakeDataServer(tmp_path)
         microscope = AutoScriptMicroscope.__new__(AutoScriptMicroscope)
-        microscope._microscope = types.SimpleNamespace(acquisition=acquisition)
-        microscope._detector_proxies = {"data": FakeDataServer()}
+        microscope._microscope = types.SimpleNamespace(acquisition=acquisition, optics=optics)
+        microscope._detector_proxies = {"data": data_server}
 
-        def fake_new_path(device, acquisition_type: str, detector: str, data_server=None, extension="h5"):
-            return tmp_path / f"{acquisition_type}_{detector}.h5"
+        result = AutoScriptMicroscope._acquire_scanned_data_advanced(microscope, imsize=2, dwell_time=10e-3, detector="bm-ceta", scan_region=[0.25, 0.25, 0.5, 0.5])
 
-        monkeypatch.setattr("asyncroscopy.data.data_writer.acquisition_filename", fake_new_path)
-
-        result = AutoScriptMicroscope._acquire_scanned_data_advanced(
-            microscope,
-            imsize=128,
-            dwell_time=10e-3,
-            detector="BM-Ceta",
-            scan_region=[0.25, 0.25, 0.5, 0.5],
-        )
-
-        settings = acquisition.settings
+        assert acquisition.positions == [
+            [0.375, 0.375],
+            [0.625, 0.375],
+            [0.375, 0.625],
+            [0.625, 0.625],
+        ]
+        assert optics.paused_scan_beam_position == [0.1, 0.2]
+        assert all(settings.camera_detector == "BM-Ceta" for settings in acquisition.settings)
+        assert all(settings.size == 256 for settings in acquisition.settings)
+        assert all(settings.exposure_time == pytest.approx(10e-3) for settings in acquisition.settings)
+        assert all(settings.fixed_readout_area == "Half" for settings in acquisition.settings)
         with h5py.File(result, "r") as h5:
-            assert h5["stem_data"][()].tolist() == [[5, 6], [7, 8]]
+            assert h5["stem_data"].shape == (2, 2, 256, 256)
+            assert h5["stem_data"][:, :, 0, 0].tolist() == [[1, 2], [3, 4]]
             assert h5["stem_data"].attrs["detector"] == "BM-Ceta"
-        assert settings.size == 128
-        assert settings.dwell_time == pytest.approx(10e-3)
-        assert settings.detector_types == [CameraType.BM_CETA]
-        assert settings.region.coordinate_system == RegionCoordinateSystem.RELATIVE
-        assert settings.region.rectangle.left == pytest.approx(0.25)
-        assert settings.region.rectangle.top == pytest.approx(0.25)
-        assert settings.region.rectangle.width == pytest.approx(0.5)
-        assert settings.region.rectangle.height == pytest.approx(0.5)
 
     def test_camera_settings_propagate_into_acquisition(
         self,
@@ -238,7 +242,6 @@ class TestAutoScriptMicroscope:
         camera_proxy.readout_area = "Half"
         camera_proxy.camera_detector = "BM-Ceta"
         camera_proxy.frame_combining = 6
-        camera_proxy.electron_counting = False
         camera_proxy.output_format = ".h5"
 
         saved_path = auto_script_proxy.acquire_camera_image()
@@ -251,7 +254,6 @@ class TestAutoScriptMicroscope:
                 "detector": "BM-Ceta",
                 "readout_area": "Half",
                 "frame_combining": 6,
-                "electron_counting": False,
                 "output_format": ".h5",
             }
         ]
@@ -291,7 +293,6 @@ class TestAutoScriptMicroscope:
             detector="BM-Ceta",
             readout_area="Half",
             frame_combining=6,
-            electron_counting=False,
         )
 
         settings = acquisition.settings
@@ -300,7 +301,6 @@ class TestAutoScriptMicroscope:
         assert settings.exposure_time == pytest.approx(0.5)
         assert settings.fixed_readout_area == FixedReadoutArea.HALF
         assert settings.frame_combining == 6
-        assert settings.electron_counting is False
         with h5py.File(result, "r") as h5:
             assert h5["image"][()].tolist() == [[9, 8], [7, 6]]
             assert h5["image"].attrs["acquisition_type"] == "camera_image"
@@ -342,7 +342,6 @@ class TestAutoScriptMicroscope:
         camera_proxy.imsize = 1024
         camera_proxy.readout_area = "Full"
         camera_proxy.frame_combining = 1
-        camera_proxy.electron_counting = True
         camera_proxy.output_format = ".h5"
 
         saved_path = auto_script_proxy.acquire_camera_image()
@@ -355,7 +354,6 @@ class TestAutoScriptMicroscope:
                 "detector": "Flucam",
                 "readout_area": "Full",
                 "frame_combining": 1,
-                "electron_counting": True,
                 "output_format": ".h5",
             }
         ]

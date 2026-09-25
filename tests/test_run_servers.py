@@ -104,6 +104,19 @@ def test_load_tilt_twin_config_includes_simulation_properties():
     assert properties["stage_device_address"] == ["asyncroscopy/stage/default"]
 
 
+def test_load_particle_twin_config_uses_renamed_module():
+    config = run_servers.load_config(
+        run_servers.PROJECT_DIR / "configs" / "digital_twin_particles.yaml"
+    )
+    properties = run_servers.instrument_properties(config)
+
+    assert config.instrument.class_name == "DigitalTwinParticles"
+    assert config.instrument.module_name.endswith("digital_twin_particles")
+    assert properties["world_imsize"] == ["128"]
+    assert properties["data_device_address"] == ["asyncroscopy/data/default"]
+    assert properties["stage_device_address"] == ["asyncroscopy/stage/default"]
+
+
 def test_load_mcp_config():
     config = run_mcp.load_config(run_mcp.PROJECT_DIR / "configs" / "mcp.yaml")
 

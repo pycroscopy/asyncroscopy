@@ -138,7 +138,6 @@ def test_particle_camera_acquisition_saves_local_lattice_metadata(monkeypatch, t
             'BM-Ceta',
             'Half',
             frame_combining=6,
-            electron_counting=False,
         )
     )
 
@@ -151,7 +150,6 @@ def test_particle_camera_acquisition_saves_local_lattice_metadata(monkeypatch, t
         assert attrs['exposure_time'] == pytest.approx(0.1)
         assert attrs['readout_area'] == 'Half'
         assert attrs['frame_combining'] == 6
-        assert bool(attrs['electron_counting']) is False
 
 
 def test_off_particle_camera_acquisition_saves_vacuum_diffraction(tmp_path: Path):

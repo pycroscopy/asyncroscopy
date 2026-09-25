@@ -8,7 +8,7 @@ import subprocess
 import json
 import os
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 import yaml
 
@@ -32,6 +32,7 @@ class MCPConfig:
     quiet: bool
     blocked_classes: list[str]
     blocked_functions: dict[str, list[str]]
+    include_only_functions: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -67,6 +68,7 @@ def load_config(path: Path) -> Config:
             quiet=bool(_require(mcp, 'quiet', 'mcp')),
             blocked_classes=list(_require(mcp, 'blocked_classes', 'mcp')),
             blocked_functions={key: list(value) for key, value in _require(mcp, 'blocked_functions', 'mcp').items()},
+            include_only_functions=list(mcp.get('include_only_functions', [])),
         ),
     )
 
@@ -96,6 +98,8 @@ def build_command(config: Config) -> list[str]:
         json.dumps(config.mcp.blocked_classes),
         '--blocked-functions-json',
         json.dumps(config.mcp.blocked_functions),
+        '--include-only-functions-json',
+        json.dumps(config.mcp.include_only_functions),
     ]
     if config.mcp.quiet:
         command.append('--quiet')

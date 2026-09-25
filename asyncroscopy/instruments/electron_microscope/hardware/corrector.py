@@ -1,283 +1,106 @@
-"""
-Corrector device server.
+"""Backend-neutral aberration-corrector Tango interface."""
 
-Acts as a translator between the Tango control system and the real CEOS
-hardware server (JSON-RPC over netstring-framed TCP).
-
-Communication pattern
----------------------
-Commands sent to this device are forwarded to the CEOS hardware server as
-JSON-RPC 2.0 requests, encoded in netstring format::
-
-    <length>:<json_payload>,
-
-The response is decoded the same way and returned to the Tango client.
-
-Return convention
------------------
-All commands return DevString containing the raw JSON-RPC result payload
-so that the caller can parse it as needed.
-
-Client-side example::
-
-    import json
-    proxy = tango.DeviceProxy("asyncroscopy/ceos/default")
-
-    info        = json.loads(proxy.get_info())
-    aberrations = json.loads(proxy.get_aberrations())
-    proxy.run_tableau("Fast 18")          # tabType, angle — space-separated
-    proxy.correct_aberration("A1 0.0")    # name, value  — space-separated
-"""
+from __future__ import annotations
 
 import json
-import logging
-import socket
-from typing import Optional
+from abc import abstractmethod
+from typing import Any
 
-import tango
-from tango import AttrWriteType, DevState, DevEncoded, DevString
-from tango.server import Device, attribute, command, device_property
-
-log = logging.getLogger("CEOS_corrector")
-log.setLevel(logging.INFO)
+from tango import AttrWriteType, DevState, DevString
+from tango.server import Device, attribute, command
 
 
 class CORRECTOR(Device):
+    """Common Tango API implemented by real and simulated correctors.
+
+    The public commands deliberately retain the CEOS-compatible JSON response
+    structure used by the existing notebooks. Concrete implementations only
+    supply backend operations.
     """
-    Tango device that wraps the CEOS corrector hardware server.
-
-    Each command opens a short-lived TCP connection to the CEOS server,
-    sends a JSON-RPC 2.0 request, waits for the response, and returns the
-    result as a JSON string.
-    """
-
-    # ------------------------------------------------------------------
-    # Device properties
-    # ------------------------------------------------------------------
-
-    ceos_host = device_property(
-        dtype=str,
-        default_value="10.46.217.241",
-        doc="Hostname or IP address of the CEOS hardware server",
-    )
-
-    ceos_port = device_property(
-        dtype=int,
-        default_value=9092,
-        doc="TCP port of the CEOS hardware server",
-    )
-
-    socket_timeout = device_property(
-        dtype=float,
-        default_value=120000.0,
-        doc="Socket timeout in seconds for CEOS communication",
-    )
-
-    # ------------------------------------------------------------------
-    # Attributes
-    # ------------------------------------------------------------------
 
     status_message = attribute(
         label="Status message",
         dtype=str,
         access=AttrWriteType.READ,
-        doc="Last status string received from the CEOS server",
+        doc="Last backend status string",
     )
-
-    # ------------------------------------------------------------------
-    # Initialisation
-    # ------------------------------------------------------------------
 
     def init_device(self) -> None:
         Device.init_device(self)
         self.set_state(DevState.INIT)
-
-        self._message_id: int = 1
-        self._last_status: str = "Uninitialised"
-
-        self._connect()
-
-    def _connect(self) -> None:
-        """Verify TCP connectivity to the CEOS server and transition to ON."""
-        try:
-            with socket.create_connection(
-                (self.ceos_host, self.ceos_port),
-                timeout=self.socket_timeout,
-            ):
-                pass
-            self.info_stream(
-                f"CEOS server reachable at {self.ceos_host}:{self.ceos_port}"
-            )
-            self._last_status = "Connected"
-            self.set_state(DevState.ON)
-        except OSError as exc:
-            self.error_stream(f"Cannot reach CEOS server: {exc}")
-            self._last_status = f"Connection failed: {exc}"
-            self.set_state(DevState.FAULT)
-
-    # ------------------------------------------------------------------
-    # Attribute read methods
-    # ------------------------------------------------------------------
+        self._last_status = "Initialising"
+        self._simulation_aberrations: dict[str, Any] = {}
+        self._connect_backend()
 
     def read_status_message(self) -> str:
         return self._last_status
 
-    # ------------------------------------------------------------------
-    # Public commands
-    # ------------------------------------------------------------------
-
     @command(dtype_out=DevString)
     def get_info(self) -> str:
-        """Return general information about the CEOS corrector."""
-        return self._call("getInfo")
-
+        return self._get_info()
 
     @command(dtype_in=str, dtype_out=DevString)
     def acquire_tableau(self, args: str) -> str:
-        """
-        Run a correction tableau on the CEOS corrector.
-
-        Parameters are packed into one space-separated string because
-        Tango scalar commands accept only one input argument::
-
-            proxy.run_tableau("Fast 18")
-            proxy.run_tableau("Full 0")
-        """
-
         parts = args.strip().split()
-        tab_type, angle_str = parts
-        angle = float(angle_str)
-        return self._call("acquireTableau", {"tabType": tab_type, "angle": angle})
+        if len(parts) != 2:
+            raise ValueError("acquire_tableau expects '<type> <angle>'")
+        tab_type, angle = parts
+        return self._acquire_tableau(tab_type, float(angle))
 
     @command(dtype_out=DevString)
     def measure_c1a1(self) -> str:
-        return self._call("measureC1A1")
+        return self._measure_c1a1()
 
     @command(dtype_in=str, dtype_out=DevString)
     def correct_aberration(self, args: str) -> str:
-        """
-        Set a single aberration to the given value.
-
-        Parameters are packed into one space-separated string.
-        Some aberrations (C3) take one value:
-            proxy.correct_aberration("C3 -0.00034e-6")
-        Some aberrations take two values:
-            proxy.correct_aberration("A1 0.00078 0.00027")
-        """
         parts = args.strip().split()
+        if len(parts) < 2:
+            raise ValueError("correct_aberration expects '<name> <value> [value]' ")
         name = parts[0]
-        values = [float(p) for p in parts[1:]]
-
-        # Send as list — matches what the TCP hardware server expects
-        return self._call("correctAberration", {"name": name, "value": values})
+        values = [float(value) for value in parts[1:]]
+        return self._correct_aberration(name, values)
 
     @command
     def reconnect(self) -> None:
-        """Re-attempt the TCP connection to the CEOS server."""
-        self._connect()
-
-
-    # ------------------------------------------------------------------
-    # Public commands pertaining to simulation
-    # ------------------------------------------------------------------
+        self._connect_backend()
 
     @command(dtype_in=str)
-    def set_aberrations_coeff_sim(self, json_aberrations_string: str):
-        self.ab = json.loads(json_aberrations_string)
-        pass
+    def set_aberrations_coeff_sim(self, json_aberrations_string: str) -> None:
+        coefficients = json.loads(json_aberrations_string)
+        if not isinstance(coefficients, dict):
+            raise ValueError("Simulation aberrations must be a JSON object")
+        self._set_simulation_aberrations(coefficients)
 
     @command(dtype_out=str)
-    def get_aberrations_coeff_sim(self):
-        if self.ab == None:
-            return
-        return json.dumps(self.ab)
+    def get_aberrations_coeff_sim(self) -> str:
+        return json.dumps(self._get_simulation_aberrations())
 
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
+    def _set_simulation_aberrations(self, coefficients: dict[str, Any]) -> None:
+        self._simulation_aberrations = coefficients
 
-    def _call(self, method: str, params: Optional[dict] = None) -> dict:
-        """
-        Send a JSON-RPC 2.0 request to the CEOS server and return the
-        decoded response JSON string.
+    def _get_simulation_aberrations(self) -> dict[str, Any]:
+        return self._simulation_aberrations
 
-        Parameters
-        ----------
-        method:
-            JSON-RPC method name (e.g. ``"GetInfo"``).
-        params:
-            Optional dict of named parameters.
+    @abstractmethod
+    def _connect_backend(self) -> None:
+        """Connect or initialize the concrete backend."""
 
-        Returns
-        -------
-        str
-            Inner JSON string from the CEOS netstring response.
+    @abstractmethod
+    def _get_info(self) -> str:
+        """Return a CEOS-compatible JSON response string."""
 
-        Raises
-        ------
-        tango.DevFailed
-            On any communication or protocol error.
-        """
-        payload = {
-            "jsonrpc": "2.0",
-            "id": self._message_id,
-            "method": method,
-            "params": params or {},
-        }
-        self._message_id += 1
+    @abstractmethod
+    def _acquire_tableau(self, tab_type: str, angle: float) -> str:
+        """Acquire aberrations and return a CEOS-compatible JSON response."""
 
-        netstring = self._encode_netstring(payload)
-        self.debug_stream(f"[CEOS] -> {netstring}")
+    @abstractmethod
+    def _measure_c1a1(self) -> str:
+        """Measure first-order aberrations."""
 
-        try:
-            with socket.create_connection(
-                (self.ceos_host, self.ceos_port),
-                timeout=self.socket_timeout,
-            ) as sock:
-                sock.sendall(netstring)
-                raw_response = self._recv_netstring(sock)
+    @abstractmethod
+    def _correct_aberration(self, name: str, values: list[float]) -> str:
+        """Apply a correction using backend-native semantics."""
 
-            self.debug_stream(f"[CEOS] <- {raw_response}")
-            result = self._decode_netstring(raw_response)
-            self._last_status = "OK"
-            return result
-
-        except OSError as exc:
-            self.error_stream(f"CEOS communication error: {exc}")
-            self._last_status = f"Error: {exc}"
-            self.set_state(DevState.FAULT)
-            tango.Except.throw_exception(
-                "CeosCommError",
-                str(exc),
-                "CeosCorrector._call()",
-            )
-
-    def _encode_netstring(self, payload: dict) -> bytes:
-        """Serialize *payload* dict as a length-prefixed JSON-RPC netstring."""
-        body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-        return f"{len(body)}:".encode("ascii") + body + b","
-
-    def _decode_netstring(self, raw: bytes) -> str:
-        """Strip the netstring length prefix and trailing comma."""
-        s = raw.decode("utf-8").strip()
-        if ":" in s and s.split(":", 1)[0].isdigit():
-            _, s = s.split(":", 1)
-        return s.rstrip(",")
-
-    def _recv_netstring(self, sock: socket.socket, bufsize: int = 4096) -> bytes:
-        """Read from *sock* until a complete netstring (ending with b',') arrives."""
-        buffer = b""
-        while not buffer.endswith(b","):
-            chunk = sock.recv(bufsize)
-            if not chunk:
-                break
-            buffer += chunk
-        return buffer
-
-
-# ---------------------------------------------------------------------------
-# Server entry point
-# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
     CORRECTOR.run_server()
