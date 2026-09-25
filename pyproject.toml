@@ -43,6 +43,8 @@ dependencies = [
     "pyqt6>=6.8,<6.13",
     "ipympl>=0.10.0",
     "pyro5>=5.17",
+    "event-model>=1.24.0",
+    "igor2>=0.5.13",
 ]
 
 [project.optional-dependencies]
@@ -92,6 +94,7 @@ torch = [
 torchvision = [
     { index = "pytorch-cu130", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
 ]
+scifireaders = { git = "https://github.com/pycroscopy/SciFiReaders", rev = "7e78164dfce252fa26024eda57c5c7778f8d2922" }
 
 [[tool.uv.index]]
 name = "pytorch-cu130"
