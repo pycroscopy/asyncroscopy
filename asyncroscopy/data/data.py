@@ -31,6 +31,8 @@ from tango.server import Device, attribute, command
 from tiled.client import from_uri
 from tiled.client.register import identity, register
 
+from asyncroscopy.data.data_reader import MIMETYPES_BY_FILE_EXT
+
 DEFAULT_TILED_URI = "http://10.46.217.241:9091"
 DEFAULT_ACQUISITION_DIR = "outputs/tiled_acquisitions"
 ONE_NODE_PER_FILE_WALKER = "tiled.client.register:one_node_per_item"
@@ -194,7 +196,7 @@ class DATA(Device):
         async def register_file_and_wait_for_key() -> None:
             client = from_uri(self._tiled_uri(), api_key=self._api_key)
             # Acquisition files are already closed; expose this file before returning.
-            await register(client, path, adapters_by_mimetype={"application/x-hdf5": "asyncroscopy.data.data_reader:NSIDAdapter"}, walkers=[ONE_NODE_PER_FILE_WALKER], key_from_filename=identity)
+            await register(client, path, adapters_by_mimetype={"application/x-sidpy": "asyncroscopy.data.data_reader:SIDPYAdapter"}, mimetypes_by_file_ext=MIMETYPES_BY_FILE_EXT, walkers=[ONE_NODE_PER_FILE_WALKER], key_from_filename=identity)
             if not hasattr(client, "__getitem__"):
                 return
             deadline = time.monotonic() + REGISTER_TIMEOUT_SECONDS
@@ -230,7 +232,7 @@ class DATA(Device):
         try:
             client = from_uri(self._tiled_uri(), api_key=self._api_key)
             asyncio.run(asyncio.wait_for(
-                register(client, save_path, adapters_by_mimetype={"application/x-hdf5": "asyncroscopy.data.data_reader:NSIDAdapter"}, walkers=[ONE_NODE_PER_FILE_WALKER], key_from_filename=identity),
+                register(client, save_path, adapters_by_mimetype={"application/x-sidpy": "asyncroscopy.data.data_reader:SIDPYAdapter"}, mimetypes_by_file_ext=MIMETYPES_BY_FILE_EXT, walkers=[ONE_NODE_PER_FILE_WALKER], key_from_filename=identity),
                 REGISTER_SAVE_PATH_TIMEOUT_SECONDS,
             ))
         except Exception as exc:

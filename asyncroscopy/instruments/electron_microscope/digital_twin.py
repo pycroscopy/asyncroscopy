@@ -14,6 +14,7 @@ from ase import Atoms
 from ase.build import bulk
 from tango import AttrWriteType, DevState
 from tango.server import Device, attribute, device_property
+import sidpy
 
 from asyncroscopy.instruments.electron_microscope.electron_microscope import ElectronMicroscope
 from asyncroscopy.data.data_writer import save_acquisition
@@ -524,7 +525,15 @@ class DigitalTwin(ElectronMicroscope):
         data_server = self._detector_proxies.get("data")
         images = []
         for detector in detector_list:
-            image = self._render_stem_image(int(imsize), float(dwell_time), [detector])
+            # image = self._render_stem_image(int(imsize), float(dwell_time), [detector])
+            # images.append(image)
+            pixels = self._render_stem_image(imsize, float(dwell_time), [detector])  # also syncs the stage position
+            # Calibrated axes: pixel centres in metres across the field of view, around the stage position.
+            coordinates = ((np.arange(imsize) + 0.5) / imsize - 0.5) * self._fov
+            image = sidpy.Dataset.from_array(pixels, title=detector, datatype="IMAGE", quantity="Normalized intensity", units="a.u.", modality="STEM", source="DigitalTwin")
+            image.set_dimension(0, sidpy.Dimension(coordinates + self._stage_position[1], name="y", quantity="Length", units="m", dimension_type="spatial"))
+            image.set_dimension(1, sidpy.Dimension(coordinates + self._stage_position[0], name="x", quantity="Length", units="m", dimension_type="spatial"))
+            image.metadata = {"acquisition_type": "stem_image", "detector": detector, "dwell_time_s": float(dwell_time), "fov_m": float(self._fov), "pixel_size_m": float(self._fov / imsize)}
             images.append(image)
         return save_acquisition(self, data_server, "stem_image", detector_list, images)
 

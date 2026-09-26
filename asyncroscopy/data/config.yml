@@ -8,4 +8,4 @@ trees:
       writable_storage:
         - ${ASYNCROSCOPY_ACQUISITION_DIR}
       adapters_by_mimetype:
-        application/x-hdf5: asyncroscopy.data.data_reader:NSIDAdapter
+        application/x-sidpy: asyncroscopy.data.data_reader:SIDPYAdapter
