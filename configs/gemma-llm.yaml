@@ -4,7 +4,7 @@ tango:
   host: localhost
   port: 9094
 
-mcp_url: "http://127.0.0.1:8001/mcp"
+mcp_url: "http://127.0.0.1:8000/mcp"
 local_model_path: C:\Users\Public\Desktop\Agents\Gemma4-31B-4bit
 
 startup_agents:

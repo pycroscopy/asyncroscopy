@@ -1,0 +1,52 @@
+instrument:
+  class_name: PolycrystallineGoldDigitalTwin
+  file: asyncroscopy/instruments/electron_microscope/polycrystalline_gold_digital_twin.py
+  description: "Atomistic polycrystalline FCC gold slab HAADF digital twin"
+  timeout_seconds: 120
+  properties:
+    corrector_device_address: asyncroscopy/corrector/default
+    sample_seed: 20260811
+    volume_size_xy_nm: 200
+    volume_thickness_nm: 10
+    grain_size_angstrom: 10
+    empty_grain_fraction: 0.15
+    lattice_constant_angstrom: 4.08
+    zone_axis_max_index: 2
+    zone_axis_max_deviation_deg: 2.0
+    acceleration_voltage_ev: 200000
+    convergence_angle_mrad: 30
+    beam_current_pa: 100
+    blur_noise_level: 0.5
+
+devices:
+  camera:
+    module_name: asyncroscopy.instruments.electron_microscope.detectors.camera
+  corrector:
+    class_name: DigitalTwinCorrector
+    module_name: asyncroscopy.instruments.electron_microscope.hardware.corrector_digital_twin
+    properties:
+      random_seed: 1729
+      measurement_noise_fraction: 0.0
+  data:
+    module_name: asyncroscopy.data.data
+  eds:
+    module_name: asyncroscopy.instruments.electron_microscope.detectors.eds
+  scan:
+    module_name: asyncroscopy.instruments.electron_microscope.hardware.scan
+  stage:
+    class_name: TestStage
+    module_name: asyncroscopy.instruments.electron_microscope.hardware.TestStage
+
+tango:
+  host: 127.0.0.1
+  port: 9094
+  reset_database_file: true
+
+tiled:
+  host: 127.0.0.1
+  port: 9091
+  acquisition_dir: outputs/tiled_acquisitions
+  autostart: true
+  register_on_startup: false
+
+device_timeout_seconds: 120

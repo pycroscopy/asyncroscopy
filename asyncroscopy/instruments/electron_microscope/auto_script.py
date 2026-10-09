@@ -19,6 +19,7 @@ DATA/Tiled unique id for that saved acquisition.
 import json
 import math
 import time
+from pathlib import Path
 
 import numpy as np
 import tango
@@ -35,13 +36,15 @@ try:
     import autoscript_tem_microscope_client
     from autoscript_tem_microscope_client import TemMicroscopeClient
     from autoscript_tem_microscope_client.enumerations import EdsDetectorType
-    from autoscript_tem_microscope_client.enumerations import CameraType, FixedReadoutArea, RegionCoordinateSystem, ExposureTimeType
+    from autoscript_tem_microscope_client.enumerations import RegionCoordinateSystem, ExposureTimeType
     from autoscript_tem_microscope_client.structures import Region, Rectangle
-    from autoscript_tem_microscope_client.structures import StemAcquisitionSettings, EdsAcquisitionSettings, RunOptiStemSettings, CameraAcquisitionSettings, StemDataSettings
+    from autoscript_tem_microscope_client.structures import StemAcquisitionSettings, EdsAcquisitionSettings, RunOptiStemSettings, CameraAcquisitionSettings
 
     _AUTOSCRIPT_AVAILABLE = True
 except ImportError:
     _AUTOSCRIPT_AVAILABLE = False
+
+AUTOSCRIPT_STEM_OUTPUT_DIRECTORY = Path(r"Y:\AutoScript TEM")
 
 
 class AutoScriptMicroscope(ElectronMicroscope):
@@ -187,7 +190,7 @@ class AutoScriptMicroscope(ElectronMicroscope):
                 continue
             try:
                 proxy = tango.DeviceProxy(address)
-                proxy.set_timeout_millis(12_000)
+                proxy.set_timeout_millis(3_600_000 if name == "data" else 12_000)
                 self._detector_proxies[name] = proxy
                 self.info_stream(f"Connected to detector proxy: {name} @ {address}")
             except tango.DevFailed as e:
@@ -276,36 +279,24 @@ class AutoScriptMicroscope(ElectronMicroscope):
         detector: str,
         readout_area: str,
         frame_combining: int = 1,
-        electron_counting: bool = True,
         output_format: str = ".h5",
     ) -> str:
         """
         Call advanced AutoScript camera acquisition, save the adorned image,
         and return its DATA/Tiled key.
         """
-        camera_detector = {
-            "Flucam": CameraType.FLUCAM,
-            "BM-Ceta": CameraType.BM_CETA,
-            "EF-Ceta": CameraType.EF_CETA,
-            "BM-Falcon": CameraType.BM_FALCON,
-            "EF-Falcon": CameraType.EF_FALCON,
-            "BM-Empad": CameraType.BM_EMPAD,
-            "SH-Empad": CameraType.SH_EMPAD,
-            "EF-CCD": CameraType.EF_CCD,
-            "EF-Empad": CameraType.EF_EMPAD,
-        }.get(detector, detector)
+        camera_detector = {"flucam": "Flucam", "bm-ceta": "BM-Ceta"}.get(detector.lower(), detector)
         fixed_readout_area = {
-            "Full": FixedReadoutArea.FULL,
-            "Half": FixedReadoutArea.HALF,
-            "Quarter": FixedReadoutArea.QUARTER,
-        }.get(readout_area, readout_area)
+            "full": "Full",
+            "half": "Half",
+            "quarter": "Quarter",
+        }.get(readout_area.lower(), readout_area)
         settings = CameraAcquisitionSettings(
             camera_detector=camera_detector,
             size=imsize,
             exposure_time=exposure_time,
             fixed_readout_area=fixed_readout_area,
             frame_combining=frame_combining,
-            electron_counting=electron_counting,
         )
         adorned = self._microscope.acquisition.acquire_camera_image_advanced(settings)
         data_server = self._detector_proxies.get("data")
@@ -318,21 +309,66 @@ class AutoScriptMicroscope(ElectronMicroscope):
             output_format=output_format,
         )
 
+
+    # the following file is COMPLETELY CORRECT, except the AutoScript acquire_stem_data_advanced is currently trash.
+    # it only records the origin corner of the camera, which is covered by the HAADF and ureachable at short camera lengths.
+    # waiting on an email back with a fix. -Austin Houston, Aug 11th 2026
+    '''
     def _acquire_scanned_data_advanced(self, imsize: int, dwell_time: float, detector: str, scan_region: list[float]) -> str:
-        """
-        Trigger AutoScript advanced scanned data acquisition with a camera detector.
-
-        AutoScript offloads the 4D scanned data storage for Ceta acquisitions, so
-        this command returns an acknowledgement and the settings used rather
-        than a local saved file path.
-        """
-        camera_detector = CameraType.BM_CETA if detector == "BM-Ceta" else detector
-        settings = StemDataSettings(dwell_time=dwell_time, detector_types=[camera_detector], size=imsize, region=Region(RegionCoordinateSystem.RELATIVE, Rectangle(*scan_region)))
-        adorned = self._microscope.acquisition.acquire_stem_data_advanced(settings)
+        """Acquire AutoScript 4D-STEM data and return its registered HDF5 key."""
         data_server = self._detector_proxies.get("data")
-        return save_acquisition(self, data_server, "stem_data", str(detector), adorned, dataset_name="stem_data")
+        if not AUTOSCRIPT_STEM_OUTPUT_DIRECTORY.is_dir():
+            raise FileNotFoundError(f"AutoScript STEM output directory is not readable: {AUTOSCRIPT_STEM_OUTPUT_DIRECTORY}")
 
-    # test: not sure this is how we want to save
+        files_before = set(AUTOSCRIPT_STEM_OUTPUT_DIRECTORY.glob("*.mrc"))
+        region = Region(RegionCoordinateSystem.RELATIVE, Rectangle(*scan_region))
+        settings = StemDataSettings(dwell_time=dwell_time, detector_types=[CameraType.BM_CETA], size=imsize, region=region)
+        self._microscope.acquisition.acquire_stem_data_advanced(settings)
+        for _ in range(11):
+            new_files = set(AUTOSCRIPT_STEM_OUTPUT_DIRECTORY.glob("*.mrc")) - files_before
+            if new_files:
+                break
+            time.sleep(0.5)
+
+        if len(new_files) != 1:
+            raise RuntimeError(f"Expected one new AutoScript MRC file, found {len(new_files)}")
+
+        source_path = new_files.pop()
+        request = {
+            "source_path": str(source_path),
+            "detector": detector,
+            "scan_shape": [int(imsize), int(imsize)],
+            "dwell_time": float(dwell_time),
+            "scan_region": list(scan_region),
+        }
+        return data_server.copy_and_register_remote_file(json.dumps(request))
+        '''
+
+    def _acquire_scanned_data_advanced(self, imsize: int, dwell_time: float, detector: str, scan_region: list[float]) -> str:
+        """Acquire 4D-STEM data by placing the probe and recording one Ceta image per scan point."""
+        scan_size = int(imsize)
+        left, top, width, height = [float(value) for value in scan_region]
+        x_positions = left + (np.arange(scan_size) + 0.5) * width / scan_size
+        y_positions = top + (np.arange(scan_size) + 0.5) * height / scan_size
+        camera_detector = {"flucam": "Flucam", "bm-ceta": "BM-Ceta"}.get(detector.lower(), detector)
+        settings = CameraAcquisitionSettings(camera_detector=camera_detector, size=256, exposure_time=dwell_time, fixed_readout_area="Half")
+        starting_beam_position = self._microscope.optics.paused_scan_beam_position
+        frames = []
+        try:
+            for y_position in y_positions:
+                for x_position in x_positions:
+                    self._microscope.optics.paused_scan_beam_position = [float(x_position), float(y_position)]
+                    image = self._microscope.acquisition.acquire_camera_image_advanced(settings)
+                    frames.append(np.array(image.data, copy=True))
+        finally:
+            self._microscope.optics.paused_scan_beam_position = starting_beam_position
+
+        stem_data = np.stack(frames).reshape(scan_size, scan_size, 256, 256)
+        attrs = {"scan_shape": [scan_size, scan_size], "diffraction_shape": [256, 256], "dwell_time": float(dwell_time), "scan_region": [left, top, width, height], "readout_area": "Half"}
+        data_server = self._detector_proxies.get("data")
+        return save_acquisition(self, data_server, "stem_data", camera_detector, stem_data, dataset_name="stem_data", dataset_attrs=attrs)
+
+
     def _acquire_spectrum(self, detector_name: str, exposure_time: float) -> str:
         settings = EdsAcquisitionSettings()
         settings.eds_detector = EdsDetectorType.SUPER_X

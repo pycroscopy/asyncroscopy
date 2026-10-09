@@ -71,6 +71,8 @@ def save_acquisition(
         raise ValueError(f"Unsupported output_format {output_format!r}; expected '.h5' or '.tiff'")
     detector_list = list(detectors) if isinstance(detectors, (list, tuple)) else [detectors]
     data_list = list(data) if isinstance(data, (list, tuple)) else [data]
+    if not data_list:
+        raise ValueError("save_acquisition called with no data to save (empty detector/data list)")
     attrs_list = dataset_attrs if isinstance(dataset_attrs, list) else [dataset_attrs] * len(data_list)
 
     if output_format == ".tiff":

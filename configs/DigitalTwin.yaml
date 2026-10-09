@@ -15,10 +15,14 @@ devices:
     module_name: asyncroscopy.instruments.electron_microscope.hardware.scan
   stage:
     module_name: asyncroscopy.instruments.electron_microscope.hardware.stage
+  corrector:
+    class_name: DigitalTwinCorrector
+    module_name: asyncroscopy.instruments.electron_microscope.hardware.corrector_digital_twin
 
 tango:
   host: localhost
   port: 9094
+  reset_database_file: true
 
 tiled:
   host: localhost

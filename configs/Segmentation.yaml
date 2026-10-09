@@ -1,0 +1,11 @@
+# Segmentation Tango device configuration.
+# This launcher assumes Tango, DATA, and Tiled are already running.
+
+tango:
+  host: 216.96.178.92
+  port: 9094
+
+data_device_address: asyncroscopy/data/default
+model_size: facebook/sam2-hiera-large
+compute_device: cuda
+device_timeout_seconds: 120

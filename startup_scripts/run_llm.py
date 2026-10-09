@@ -54,8 +54,42 @@ def load_config(path: Path) -> LLMConfig:
     raw = yaml.safe_load(path.read_text(encoding='utf-8')) or {}
     return LLMConfig(**raw)
 
-def register_device(config: LLMConfig | None):
-    database = tango.Database()
+def ensure_database_running(config: LLMConfig) -> tango.Database:
+    host = config.tango.host
+    port = config.tango.port
+    tango_host = f"{host}:{port}"
+    
+    try:
+        database = tango.Database(host, port)
+        database.get_class_list("*")
+        return database
+    except tango.DevFailed:
+        pass
+
+    print(f"[SYSTEM]: Tango database not responding at {tango_host}. Launching database server...")
+    env = {**os.environ, 'TANGO_HOST': tango_host}
+    subprocess.Popen(
+        ["uv", "run", "python", "-m", "tango.databaseds.database", "2"],
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True
+    )
+
+    start_time = time.time()
+    while time.time() - start_time < 30:
+        try:
+            database = tango.Database(host, port)
+            database.get_class_list("*")
+            print(f"[SYSTEM]: Tango database at {tango_host} is now ready!")
+            return database
+        except tango.DevFailed:
+            time.sleep(1)
+
+    raise RuntimeError(f"Could not connect to Tango database at {tango_host}.")
+
+def register_device(config: LLMConfig):
+    database = ensure_database_running(config)
     try:
         device_info = tango.DbDevInfo()
         device_info.server = f"LLM/{INSTANCE_NAME}"
@@ -96,7 +130,7 @@ def main(argv: list[str] | None = None) -> int:
 
     register_device(config)
     
-    command = ["uv", "run", "python", "-m", "asyncroscopy.mcp.llm", INSTANCE_NAME]
+    command = ["uv", "run", "--extra", "agent", "--extra", "ollama", "python", "-m", "asyncroscopy.mcp.llm", INSTANCE_NAME]
     env = {**os.environ, 'TANGO_HOST': tango_host, 'PYTHONUNBUFFERED': '1'}
 
     try:

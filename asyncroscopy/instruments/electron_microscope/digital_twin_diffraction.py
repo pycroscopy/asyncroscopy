@@ -329,7 +329,6 @@ class DigitalTwinDiffraction(DigitalTwin):
         detector: str,
         readout_area: str,
         frame_combining: int = 1,
-        electron_counting: bool = True,
         output_format: str = '.h5',
     ) -> str:
         particle, rattle_value = self._beam_particle()
@@ -346,7 +345,6 @@ class DigitalTwinDiffraction(DigitalTwin):
             'exposure_time': float(exposure_time),
             'readout_area': str(readout_area),
             'frame_combining': int(frame_combining),
-            'electron_counting': bool(electron_counting),
         }
         if particle is not None:
             attrs.update(
