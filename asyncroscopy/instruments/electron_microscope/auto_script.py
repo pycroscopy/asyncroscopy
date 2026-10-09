@@ -421,12 +421,19 @@ class AutoScriptMicroscope(ElectronMicroscope):
     def _set_defocus(self, defocus) -> None:
         """Set defocus in meters."""
         if self._microscope is not None:
-            self._microscope.optics.defocus = float(defocus)
+            if self._microscope.optics.optical_mode == 'Stem' :
+                self._microscope.optics.focusing.stem.objective.defocus = float(defocus)
+            else :
+                self._microscope.optics.focusing.tem.defocus = float(defocus)
+
 
     def _get_defocus(self) -> float:
         """Get defocus in meters."""
-        return float(self._microscope.optics.defocus)
-    
+        if self._microscope.optics.optical_mode == 'Stem' :
+            return float(self._microscope.optics.focusing.stem.objective.defocus)
+        else :
+            return float(self._microscope.optics.focusing.tem.defocus)
+        
     def _set_screen(self, position: str)->None:
         if position.lower() in ['in', 'insert', 'inserted']:
             if self._microscope.detectors.screen.position == 'Retracted':
