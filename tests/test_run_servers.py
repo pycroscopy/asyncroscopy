@@ -1,4 +1,4 @@
-from startup_scripts import run_mcp, run_servers
+from startup_scripts import run_mcp, run_servers, run_llm
 
 
 class FakeDataProxy:
@@ -125,7 +125,7 @@ def test_load_mcp_config():
     assert config.tango_port == 9094
     assert config.mcp.http_host == "0.0.0.0"
     assert config.mcp.http_port == 8000
-    assert config.mcp.blocked_classes == ["DataBase", "DServer", "LLM"]
+    assert config.mcp.blocked_classes == ["DataBase", "DServer"]
     assert config.mcp.blocked_functions == {"*": ["Init", "Kill", "RestartServer"]}
 
 
@@ -158,3 +158,54 @@ def test_run_mcp_builds_server_command():
         '{"*": ["Init"], "DATA": ["stop_tiled_server"]}'
     )
     assert "--search-packages-json" not in command
+
+
+def test_load_agent_config():
+    config = run_llm.load_config(run_llm.PROJECT_DIR / "configs" / "gemma-llm.yaml")
+
+    assert config.agent.name == "Asyncroscopy_Agent_MCP"
+    assert config.agent.transport == "streamable-http"
+    assert config.agent.http_port == 8002
+    assert config.agent.model == "gemma4:31b"
+    assert config.agent.mcp_urls == ["http://127.0.0.1:8000/mcp"]
+    assert [entry["name"] for entry in config.agent.startup_agents] == ["base", "image"]
+    assert config.agent.startup_agents[0]["tools"] == ["list_devices"]
+
+
+def test_run_llm_builds_server_command():
+    config = run_llm.Config(
+        path=run_llm.PROJECT_DIR / "configs" / "gemma-llm.yaml",
+        agent=run_llm.AgentConfig(
+            name="Agent_MCP",
+            transport="streamable-http",
+            http_host="127.0.0.1",
+            http_port=8124,
+            mcp_urls=["http://127.0.0.1:8000/mcp"],
+            startup_agents=[{"name": "base", "system_prompt": "hi", "tools": ["list_devices"]}],
+        ),
+    )
+
+    command = run_llm.build_command(config)
+
+    assert command[:2] == ["uv", "run"]
+    assert "agent" in command and "ollama" in command
+    assert command[command.index("-m") + 1] == "asyncroscopy.mcp.agent_mcp_server"
+    assert command[command.index("--http-port") + 1] == "8124"
+    assert command[command.index("--mcp-urls-json") + 1] == '["http://127.0.0.1:8000/mcp"]'
+    assert "--use-init-chat-model" not in command
+
+
+def test_run_llm_command_passes_init_chat_model_flag():
+    config = run_llm.Config(
+        path=run_llm.PROJECT_DIR / "configs" / "gemma-llm.yaml",
+        agent=run_llm.AgentConfig(
+            name="Agent_MCP",
+            transport="streamable-http",
+            http_host="127.0.0.1",
+            http_port=8124,
+            mcp_urls=[],
+            use_init_chat_model=True,
+        ),
+    )
+
+    assert "--use-init-chat-model" in run_llm.build_command(config)
