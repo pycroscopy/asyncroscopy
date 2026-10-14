@@ -12,7 +12,7 @@ dependencies = [
     "ipykernel>=7.1.0",
     "jupyter>=1.1.1",
     "lxml>=6.0.2",
-    "matplotlib>=3.10.7",
+    "matplotlib==3.11.2",
     "multiprocess>=0.70.19",
     "numpy>=2.3.5",
     "pytango==10.1.2",
@@ -40,7 +40,7 @@ dependencies = [
     "pyqt5>=5.15.11,<5.16; sys_platform != 'darwin' or platform_machine != 'arm64'",
     "pyqt5-qt5==5.15.2; sys_platform == 'win32'",
     "pyqt6>=6.8,<6.10",
-    "ipympl>=0.10.0",
+    "ipympl==0.10.0",
     "tifffile>=2026.5.15",
     "pyro5>=5.17",
 ]
