@@ -30,6 +30,7 @@ Use this site to navigate contributor guidance, microscope architecture notes, h
 - [Add a Detector](Adding_New_Hardware/add_detector.md): detector onboarding checklist and implementation notes.
 - [Data Integration (Tiled)](Tiled_server/data_integration.md): how acquisitions are saved, registered, and served via the DATA device and Tiled.
 - [MCP Server Documentation](MCP/mcp_server.md): how Tango commands are exposed to MCP-compatible agents.
+- [Agent MCP Server](MCP/agent_mcp_server.md): how the LLM agent swarm is served over MCP.
 
 ## Operation
 

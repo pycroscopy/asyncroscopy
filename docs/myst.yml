@@ -32,6 +32,7 @@ project:
     - title: MCP Server
       children:
         - file: MCP/mcp_server.md
+        - file: MCP/agent_mcp_server.md
         - file: MCP/building_an_mcp.md
         - file: MCP/asyncroscopy_mcp.md
     - title: Operation

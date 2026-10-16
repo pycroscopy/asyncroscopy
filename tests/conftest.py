@@ -30,8 +30,8 @@ from asyncroscopy.instruments.electron_microscope.auto_script import AutoScriptM
 from asyncroscopy.data.data import DATA
 
 
-from tests.test_llm_device import setup_llm_stubs
-# Stub out heavy LLM dependencies
+from tests.test_agent import setup_llm_stubs
+# Stub out heavy LangChain/Ollama dependencies so the agent swarm imports without them
 setup_llm_stubs()
 
 class FakeAdornedImage:

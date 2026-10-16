@@ -1,16 +1,22 @@
 # Gemma4 31B local model startup config for LLM Tango device.
 
-tango:
-  host: localhost
-  port: 9094
+agent:
+  name: Asyncroscopy_Agent_MCP
+  transport: streamable-http
+  http_host: 0.0.0.0
+  http_port: 8002
+  model: "gemma4:31b"
+  model_provider: "ollama"
+  max_steps: 10
+  use_init_chat_model: false
 
-mcp_url: "http://127.0.0.1:8000/mcp"
-local_model_path: C:\Users\Public\Desktop\Agents\Gemma4-31B-4bit
+  mcp_urls:
+    - "http://127.0.0.1:8000/mcp"
 
-startup_agents:
-  - name: "base"
-    system_prompt: "You are a helpful assistant that can answer questions and provide information."
-    tools: ["list_devices"]
-  - name: "image"
-    system_prompt: "You are an image acquiring assistant."
-    tools: ["*image"]
+  startup_agents:
+    - name: "base"
+      system_prompt: "You are a helpful assistant that can answer questions and provide information."
+      tools: ["list_devices"]
+    - name: "image"
+      system_prompt: "You are an image acquiring assistant."
+      tools: ["*image"]
