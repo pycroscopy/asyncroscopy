@@ -18,6 +18,12 @@ Client side, ``tiled_array_to_sidpy`` rebuilds one channel and
 from collections.abc import Mapping
 from enum import Enum
 
+from pathlib import Path
+
+import h5py
+from pyNSID.io.hdf_utils import get_all_main
+from tiled.adapters.hdf5 import HDF5Adapter
+
 import numpy as np
 import sidpy
 from SciFiReaders import AutoReader
@@ -122,6 +128,9 @@ class SIDPYAdapter(MapAdapter):
 
     @classmethod
     def from_uris(cls, data_uri, **kwargs):
+        if _is_plain_hdf5(data_uri):
+            # Raw-array acquisitions (not NSID) keep Tiled's own HDF5 layout, as before.
+            return HDF5Adapter.from_uris(data_uri)
         reader = AutoReader(str(path_from_uri(data_uri)))
         datasets = reader.read()
         adapter = cls({name: _array_adapter(dataset) for name, dataset in datasets.items()}, **kwargs)
@@ -130,11 +139,24 @@ class SIDPYAdapter(MapAdapter):
 
     @classmethod
     def from_catalog(cls, data_source, node, **kwargs):
+        if _is_plain_hdf5(data_source.assets[0].data_uri):
+            return HDF5Adapter.from_catalog(data_source, node)
         return cls.from_uris(data_source.assets[0].data_uri, metadata=node.metadata_, specs=node.specs)
-
 
 def _array_adapter(dataset: sidpy.Dataset) -> ArrayAdapter:
     """One sidpy dataset -> one Tiled array node with the three-key metadata."""
     metadata = sidpy_to_tiled_metadata(dataset)
     dims = tuple(axis["name"] for axis in metadata["sidpy_metadata"]["dimensions"])
     return ArrayAdapter.from_array(dataset, dims=dims, metadata=metadata)
+
+def _is_plain_hdf5(data_uri) -> bool:
+    """True for a .h5/.hdf5 file without NSID datasets, e.g. a raw-array acquisition.
+
+    Only the .h5/.hdf5 suffix is checked: other HDF5-based vendor formats
+    (.emd) have their own SciFiReaders reader and still go through AutoReader.
+    """
+    path = path_from_uri(data_uri)
+    if Path(path).suffix.lower() not in (".h5", ".hdf5"):
+        return False
+    with h5py.File(path, "r") as h5_file:
+        return not get_all_main(h5_file, verbose=False)

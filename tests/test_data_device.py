@@ -6,6 +6,12 @@ import tango
 
 from asyncroscopy.data.data import DATA
 
+import yaml
+from asyncroscopy.data.data_reader import MIMETYPES_BY_FILE_EXT
+
+# The adapter DATA registers files with; config.yml must serve them with the same one.
+SIDPY_ADAPTERS = {"application/x-sidpy": "asyncroscopy.data.data_reader:SIDPYAdapter"}
+
 
 class TestDataDevice:
     def test_state_is_on(self, data_proxy: tango.DeviceProxy) -> None:
@@ -132,7 +138,7 @@ class TestDataDevice:
 
         monkeypatch.setattr(DATA, "_tiled_server_is_reachable", fake_alive)
         monkeypatch.setattr("asyncroscopy.data.data.sys.executable", "python")
-        monkeypatch.setattr("asyncroscopy.data.data.subprocess.Popen", lambda command, **kwargs: popen_calls.append(command) or FakeProcess())
+        monkeypatch.setattr("asyncroscopy.data.data.subprocess.Popen", lambda command, **kwargs: popen_calls.append({"command": command, "kwargs": kwargs}) or FakeProcess())
         monkeypatch.setattr(
             "asyncroscopy.data.data.subprocess.run",
             lambda command, **_: (
@@ -150,7 +156,7 @@ class TestDataDevice:
         expected_catalog = "sqlite:///C:/tiled_catalog_test/.asyncroscopy_tiled_catalog.db"
         assert returned["tiled_server"] == "yes"
         assert run_commands[0][6] == expected_catalog
-        assert popen_calls[0][5] == expected_catalog
+        assert popen_calls[0]["kwargs"]["env"]["ASYNCROSCOPY_TILED_CATALOG"] == expected_catalog
         data_proxy.stop_tiled_server()
 
     def test_register_acquisition_file_registers_single_file(
@@ -169,7 +175,7 @@ class TestDataDevice:
             return object()
 
         async def fake_register(client, path, **kwargs):
-            registrations.append(path)
+            registrations.append((path, kwargs))
 
         monkeypatch.setattr("asyncroscopy.data.data.from_uri", fake_from_uri)
         monkeypatch.setattr("asyncroscopy.data.data.register", fake_register)
@@ -177,7 +183,10 @@ class TestDataDevice:
         result = data_proxy.register_acquisition_file(str(saved))
 
         assert result == "frame.h5"
-        assert registrations == [str(saved)]
+        [(path, kwargs)] = registrations
+        assert path == str(saved)  
+        assert kwargs["adapters_by_mimetype"] == SIDPY_ADAPTERS
+        assert kwargs["mimetypes_by_file_ext"] == MIMETYPES_BY_FILE_EXT
 
     def test_register_existing_directory_registers_configured_directory(
         self,
@@ -194,7 +203,7 @@ class TestDataDevice:
             return object()
 
         async def fake_register(client, path, **kwargs):
-            registrations.append(path)
+            registrations.append((path, kwargs))
 
         monkeypatch.setattr("asyncroscopy.data.data.from_uri", fake_from_uri)
         monkeypatch.setattr("asyncroscopy.data.data.register", fake_register)
@@ -203,7 +212,18 @@ class TestDataDevice:
 
         assert result["registered_path"] == str(tmp_path)
         assert result["tiled_server_status"] == "running; registered save path"
-        assert registrations == [str(tmp_path)]
+        [(path, kwargs)] = registrations
+        assert path == str(tmp_path)
+        assert kwargs["adapters_by_mimetype"] == SIDPY_ADAPTERS
+        assert kwargs["mimetypes_by_file_ext"] == MIMETYPES_BY_FILE_EXT
+
+    def test_config_yml_serves_files_with_the_registration_adapter(self) -> None:
+        # Files are registered with SIDPY_ADAPTERS but served with config.yml's
+        # adapters; if the two drift apart, registered keys return 404.
+        config_path = Path(__file__).parents[1] / "asyncroscopy" / "data" / "config.yml"
+        config = yaml.safe_load(config_path.read_text())
+
+        assert config["trees"][0]["args"]["adapters_by_mimetype"] == SIDPY_ADAPTERS
 
     def test_register_acquisition_file_returns_windows_tiled_key(
         self,
@@ -324,7 +344,7 @@ class TestDataDevice:
 
 
         assert processes[0].terminated is True
-        assert [Path(call["command"][7]) for call in popen_calls] == [Path(first_path), Path(second_path)]
+        assert [Path(call["kwargs"]["env"]["ASYNCROSCOPY_ACQUISITION_DIR"]) for call in popen_calls] == [Path(first_path), Path(second_path)]
         assert Path(config["tiled_server_serving"]) == Path(second_path)
         assert config["tiled_server_status"] == "running; serving path; files register manually"
 

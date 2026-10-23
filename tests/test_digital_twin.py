@@ -12,6 +12,15 @@ import h5py
 import numpy as np
 import pytest
 import tango
+from SciFiReaders import NSIDReader
+
+
+def read_saved_image(path):
+    """Read the single NSID image a DigitalTwin scan saves (a calibrated sidpy dataset)."""
+    reader = NSIDReader(str(path))
+    dataset = reader.read()["Channel_000"]
+    reader.close()
+    return dataset
 
 class TestDigitalTwin:
 
@@ -34,11 +43,14 @@ class TestDigitalTwin:
 
         assert saved_path.suffix == ".h5"
         assert saved_path.exists()
-        with h5py.File(saved_path, "r") as h5:
-            image = h5["image/HAADF"][()]
-            assert image.shape == (32, 32)
-            assert h5["image/HAADF"].attrs["acquisition_type"] == "stem_image"
-            assert h5["image/HAADF"].attrs["detector"] == "HAADF"
+
+        image = read_saved_image(saved_path)
+        assert image.shape == (32, 32)
+        assert image.metadata["acquisition_type"] == "stem_image"
+        assert image.metadata["detector"] == "HAADF"
+        # Calibrated axes: pixel spacing is fov / imsize, in metres.
+        assert image.x.units == "m"
+        assert np.allclose(np.diff(image.x.values), image.metadata["pixel_size_m"])
 
     def test_stage_navigation_changes_and_restores_view(
         self,
@@ -59,17 +71,14 @@ class TestDigitalTwin:
         scan_proxy.dwell_time = 1e-6
 
         twin_proxy.move_stage([0.0, 0.0, 0.0, 0.0, 0.0])
-        with h5py.File(twin_proxy.acquire_scanned_image(["haadf"]), "r") as h5:
-            image_a = h5["image/HAADF"][()]
+        image_a = np.asarray(read_saved_image(twin_proxy.acquire_scanned_image(["haadf"])))
 
         twin_proxy.move_stage([8e-9, -7e-9, 0.0, 0.0, 0.0])
-        with h5py.File(twin_proxy.acquire_scanned_image(["haadf"]), "r") as h5:
-            image_b = h5["image/HAADF"][()]
+        image_b = np.asarray(read_saved_image(twin_proxy.acquire_scanned_image(["haadf"])))
         assert not np.array_equal(image_a, image_b)
 
         twin_proxy.move_stage([0.0, 0.0, 0.0, 0.0, 0.0])
-        with h5py.File(twin_proxy.acquire_scanned_image(["haadf"]), "r") as h5:
-            image_a_again = h5["image/HAADF"][()]
+        image_a_again = np.asarray(read_saved_image(twin_proxy.acquire_scanned_image(["haadf"])))
         assert np.array_equal(image_a, image_a_again)
 
     def test_spectrum_is_repeatable_at_same_pose_and_beam(
