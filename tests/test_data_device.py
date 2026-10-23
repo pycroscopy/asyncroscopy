@@ -90,7 +90,8 @@ class TestDataDevice:
 
         assert returned["tiled_server"] == "yes"
         command_prefix = ["python", "-m"]
-        expected_catalog = str(tmp_path / ".asyncroscopy_tiled_catalog.db")
+        catalog = tmp_path / ".asyncroscopy_tiled_catalog.db"
+        expected_catalog = f"sqlite:///{catalog.as_posix()}" if catalog.drive else str(catalog)
         expected_config = Path(__file__).parents[1] / "asyncroscopy" / "data" / "config.yml"
         actual_command = popen_calls[0]["command"]
         assert actual_command[:6] == ["python", "-m", "tiled", "serve", "config", str(expected_config)]
