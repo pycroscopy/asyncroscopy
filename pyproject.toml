@@ -43,6 +43,7 @@ dependencies = [
     "ipympl==0.10.0",
     "tifffile>=2026.5.15",
     "pyro5>=5.17",
+    "segment-anything>=1.0",
 ]
 
 [project.optional-dependencies]

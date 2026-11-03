@@ -245,3 +245,5 @@ output_tango_devices_logs/
 aws-use/
 
 .processes/
+
+*.pth
