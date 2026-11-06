@@ -5,7 +5,7 @@ It does NOT talk to AutoScript directly — the STEMMicroscope device
 reads these attributes via DeviceProxy before acquiring.
 """
 from tango import AttrWriteType, DevState
-from tango.server import Device, attribute
+from tango.server import Device, attribute, command
 
 
 class SCAN(Device):
@@ -113,6 +113,17 @@ class SCAN(Device):
         if left + width > 1.0 or top + height > 1.0:
             raise ValueError("scan_region must fit within the relative [0, 1] scan area")
         return region
+
+    # ------------------------------------------------------------------
+    # Commands
+    # ------------------------------------------------------------------
+    @command(dtype_in=float)
+    def set_dwell_time(self, dwell_time: float) -> None:
+        self.write_dwell_time(dwell_time)
+
+    @command(dtype_out=float)
+    def get_dwell_time(self) -> float:
+        return self.read_dwell_time()
 
 # ----------------------------------------------------------------------
 # Server entry point
