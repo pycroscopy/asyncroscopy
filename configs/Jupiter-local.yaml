@@ -1,0 +1,26 @@
+# Everything on the Jupiter control PC: Tango DB, device servers and notebook.
+instrument:
+  class_name: JupiterMicroscope
+  file: asyncroscopy/instruments/scanning_probe_microscope/jupiter_api.py
+  description: "Asylum Research Jupiter AFM (local)"
+  timeout_seconds: 120
+
+devices:
+  scan:
+    class_name: SCAN_Jupiter
+    module_name: asyncroscopy.instruments.scanning_probe_microscope.jupiter_api
+
+tango:
+  host: localhost
+  port: 9094
+  reset_database_file: true
+
+# Required section, but autostart:false means DATA and Tiled are never touched.
+tiled:
+  host: localhost
+  port: 9091
+  acquisition_dir: outputs/tiled_acquisitions
+  autostart: false
+  register_on_startup: false
+
+device_timeout_seconds: 120

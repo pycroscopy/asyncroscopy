@@ -1,8 +1,8 @@
 # Adding MCP Capabilities
 
-Asyncroscopy has one MCP server: `asyncroscopy.mcp.mcp_server.MCPServer`. It is
-configured by [configs/mcp.yaml](../../configs/mcp.yaml) and started with
-`startup_scripts/run_mcp.py`.
+The instrument MCP server is `asyncroscopy.mcp.mcp_server.MCPServer`. It is configured by [configs/mcp.yaml](../../configs/mcp.yaml) and started with `startup_scripts/run_mcp.py`.
+
+The LLM agent swarm is served by a second server; see [agent_mcp_server.md](agent_mcp_server.md).
 
 The server exposes two kinds of tools:
 

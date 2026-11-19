@@ -417,15 +417,35 @@ class AutoScriptMicroscope(ElectronMicroscope):
         unblank beam
         """
         self._microscope.optics.blanker.unblank()
-
     def _set_defocus(self, defocus) -> None:
         """Set defocus in meters."""
-        if self._microscope is not None:
-            self._microscope.optics.defocus = float(defocus)
+        optics = getattr(self._microscope, "optics", None)
+        if optics is None:
+            raise AttributeError("Microscope object has no optics")
+
+        if hasattr(optics, "defocus"):
+            optics.defocus = float(defocus)
+            return
+
+        mode = str(getattr(optics, "optical_mode", "")).lower()
+        if mode == "stem":
+            optics.focusing.stem.objective.defocus = float(defocus)
+        else:
+            optics.focusing.tem.defocus = float(defocus)
 
     def _get_defocus(self) -> float:
         """Get defocus in meters."""
-        return float(self._microscope.optics.defocus)
+        optics = getattr(self._microscope, "optics", None)
+        if optics is None:
+            raise AttributeError("Microscope object has no optics")
+
+        if hasattr(optics, "defocus"):
+            return float(optics.defocus)
+
+        mode = str(getattr(optics, "optical_mode", "")).lower()
+        if mode == "stem":
+            return float(optics.focusing.stem.objective.defocus)
+        return float(optics.focusing.tem.defocus)
     
     def _set_screen(self, position: str)->None:
         if position.lower() in ['in', 'insert', 'inserted']:

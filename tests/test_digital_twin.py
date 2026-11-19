@@ -26,6 +26,22 @@ class TestDigitalTwin:
 
         assert twin_proxy.get_defocus() == pytest.approx(8e-9)
 
+    def test_get_parameters_returns_status_json(self, twin_proxy: tango.DeviceProxy):
+        import json
+
+        parameters = json.loads(twin_proxy.get_parameters())
+
+        assert parameters["manufacturer"] == "UTKTeam"
+        assert parameters["stem_mode"] is True
+        assert "defocus_m" in parameters
+        assert "stage_position" in parameters
+        assert "fov_m" in parameters
+        assert parameters["scan_detectors"] == ["haadf"]
+        assert parameters["spectrum_detectors"] == ["eds"]
+        assert "BM-Ceta" in parameters["camera_detectors"]
+        assert "scan" in parameters["device_proxies"]
+        assert "detectors" not in parameters, "device roles must not be published as detectors"
+
     def test_get_image_returns_saved_hdf5(self, twin_proxy: tango.DeviceProxy, scan_proxy: tango.DeviceProxy):
         scan_proxy.imsize = 32
         scan_proxy.dwell_time = 1e-6

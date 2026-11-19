@@ -7,7 +7,7 @@ reads these attributes via DeviceProxy before acquiring.
 """
 
 from tango import AttrWriteType, DevState
-from tango.server import Device, attribute
+from tango.server import Device, attribute, command
 
 
 class EDS(Device):
@@ -57,6 +57,20 @@ class EDS(Device):
 
     def write_exposure_time(self, value: float) -> None:
         self._exposure_time = value
+
+    # ------------------------------------------------------------------
+    # Attribute read / write
+    # ------------------------------------------------------------------
+    @command(dtype_out=float)
+    def get_eds_exposure_time(self) -> float:
+        return self.read_exposure_time()
+    
+    @command(dtype_in=float)
+    def set_eds_exposure_time(self, value: float) -> None:
+        self.write_exposure_time(value)
+    
+
+
 
 
 # ----------------------------------------------------------------------

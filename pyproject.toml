@@ -39,7 +39,7 @@ dependencies = [
     "pyyaml>=6.0.3",
     "pyqt5>=5.15.11,<5.16; sys_platform != 'darwin' or platform_machine != 'arm64'",
     "pyqt5-qt5==5.15.2; sys_platform == 'win32'",
-    "pyqt6>=6.8,<6.13",
+    "pyqt6>=6.8,<6.10",
     "ipympl>=0.10.0",
     "tifffile>=2026.5.15",
     "pyro5>=5.17",
@@ -59,6 +59,10 @@ agent = [
     "langchain-openai",
     "langgraph",
     "langchain-mcp-adapters",    
+]
+
+jupiter = [
+    "aespm>=1.1.4",
 ]
 
 ollama = [
@@ -81,16 +85,22 @@ package-dir = { "" = "." }
 include = ["asyncroscopy*"]
 
 [tool.uv.sources]
-autoscript-core = { path = "stubs/AutoScript_v_1.17/autoscript_core-1.3.0-py3-none-any.whl" }
-autoscript-tem-microscope-client = { path = "stubs/AutoScript_v_1.17/autoscript_tem_microscope_client-1.17.0-py3-none-any.whl" }
-autoscript-tem-toolkit = { path = "stubs/AutoScript_v_1.17/autoscript_tem_toolkit-1.17.0-py3-none-any.whl" }
-thermoscientific-logging = { path = "stubs/AutoScript_v_1.17/thermoscientific_logging-1.3.0-py3-none-any.whl" }
+autoscript-core = { path = "stubs/AutoScript_v_1.18/autoscript_core-1.4.0-py3-none-any.whl" }
+autoscript-tem-microscope-client = { path = "stubs/AutoScript_v_1.18/autoscript_tem_microscope_client-1.18.0-py3-none-any.whl" }
+autoscript-tem-toolkit = { path = "stubs/AutoScript_v_1.18/autoscript_tem_toolkit-1.18.0-py3-none-any.whl" }
+thermoscientific-logging = { path = "stubs/AutoScript_v_1.18/thermoscientific_logging-1.4.0-py3-none-any.whl" }
 pyjem = { path = "stubs/PyJEM_v_1.3.0.3564/PyJEM-1.3.0.3564-py3-none-any.whl" }
 torch = [
     { index = "pytorch-cu130", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
 ]
 torchvision = [
     { index = "pytorch-cu130", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+
+
+[tool.uv]
+override-dependencies = [
+    "numpy>=2.3.5",
 ]
 
 [[tool.uv.index]]

@@ -402,6 +402,10 @@ def register_devices(devices: list[DeviceConfig], instrument_properties: dict[st
         device_info._class = device.class_name
         device_info.name = device.device_name
         database.add_device(device_info)
+        try:
+            database.unexport_server(device.server_name)
+        except Exception:
+            pass
         status_line("OK", device.device_name)
         for property_name, property_value in device.properties.items():
             database.put_device_property(device.device_name, {property_name: property_value})
@@ -486,7 +490,18 @@ def print_summary(
 
 
 def main(argv: list[str] | None = None) -> int:
+    shutdown_requested = False
+
     def request_shutdown(_signum, _frame) -> None:
+        # A GUI's Stop button (or a wrapper like `uv run` forwarding its own
+        # copy of the same signal) can deliver SIGTERM more than once for a
+        # single stop request. Only the first should raise: re-raising while
+        # ProcessManager.shutdown_all() is already unwinding interrupts that
+        # cleanup mid-flight and can leave child device servers orphaned.
+        nonlocal shutdown_requested
+        if shutdown_requested:
+            return
+        shutdown_requested = True
         raise KeyboardInterrupt
 
     signal.signal(signal.SIGTERM, request_shutdown)
